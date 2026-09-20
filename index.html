@@ -1,13 +1,17 @@
+<!--#region header  -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<!--スマホの表示幅あわせ-->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Genochemy（コピー）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Roboto+Mono:wght@400&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!--#endregion-->
+
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -23,7 +27,7 @@
 <main>
   <div class="left">
     <div class="program" id="program">
-      <div class="program-hint" id="programHint">← トレイからブロックをドラッグ&ドロップして遺伝子回路を組み立てましょう。<br><b>プロモーター → タンパク質コーディング領域 → ターミネーター</b> の順につなげるのが基本です。</div>
+      <div class="program-hint" id="programHint">↓ トレイからブロックをドラッグ&ドロップして遺伝子回路を組み立てましょう。<br>プロモーター → タンパク質コーディング領域 → ターミネーター</b> の順につなげるのが基本です。</div>
       <div id="canvasBlocks"></div>
       <div class="run-wrap">
         <span class="run-status" id="runStatus" style="display:none;"></span>

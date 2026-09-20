@@ -27,6 +27,7 @@
     { id:'promRepressor',   shape:'promoter',  cat:'promoter', kind:'prom-repressor', label:'リプレッサー抑制',       short:'抑制プロモーター', desc:'活性化されたリプレッサーが結合すると下流の転写が抑制されます。' },
     { id:'promActivator',   shape:'promoter',  cat:'promoter', kind:'prom-activator', label:'アクチベーター促進',     short:'促進プロモーター', desc:'活性化されたアクチベーターが結合すると下流の転写が促進されます。' },
     { id:'visiFluorescence',shape:'visible',   cat:'gene',     kind:'gene-visible',   label:'蛍光タンパク質遺伝子',   short:'GFP',        desc:'蛍光を発するタンパク質です。' },
+    { id:"DegradingEnzyme",shape:"visible",    cat:"gene",     kind:"none",           label:"分解酵素遺伝子",        short:"分解酵素",    desc:"分解酵素"},
     { id:'ctrlRepressor',   shape:'control',   cat:'gene',     kind:'gene-repressor', label:'リプレッサー遺伝子',     short:'抑制遺伝子',  desc:'プロモーターの転写を抑制します。' },
     { id:'ctrlActivator',   shape:'control',   cat:'gene',     kind:'gene-activator', label:'アクチベーター遺伝子',   short:'促進遺伝子',  desc:'プロモーターの転写を促進します。' },
     { id:'term1',           shape:'terminator',cat:'terminator',kind:'terminator',    label:'ターミネーター',         short:'ターミネーター', desc:'転写を終了します。これ以降のブロックは転写されません。' },
@@ -322,8 +323,8 @@
   }
 
   function analyze(){
-    const heads = [...blocks.values()].filter(b => !b.prev);
-    const chainsRaw = heads.map(walkChain).filter(seqArr => seqArr[0].part.cat === 'promoter');
+    const heads=[...blocks.values()].filter(b=>!b.prev);
+    const chainsRaw=heads.map(walkChain).filter(seqArr=>seqArr[0].part.cat==='promoter');
 
     // pass 1: regulator supply — treat promRepressor as unrepressed, promActivator as OFF (first-order approx)
     let repressorSupply = 0, activatorSupply = 0;
@@ -386,6 +387,8 @@
     return svg;
   }
 
+
+
   function runSimulation(){
     program.classList.add('running');
     runStatus.style.display = 'inline-block';
@@ -430,6 +433,7 @@
     let totalGFP = 0, totalKill = 0;
     const items = [];
     results.forEach((r, ci) => r.genes.forEach((g, gi) => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
+    const hasDegradingEnzyme = items.some(it => it.part.id === 'DegradingEnzyme');
     items.forEach(it => {
       if (it.part.kind === 'gene-visible') totalGFP += it.Pss;
       if (it.part.kind === 'gene-kill') totalKill += it.Pss;
@@ -449,13 +453,14 @@
     } else if (totalGFP > 0.1) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ GFPが発現し、Genomyが発光しています（発現量 ≈ ' + totalGFP.toFixed(2) + '）。';
-    } else if (items.length) {
-      previewStatus.className = 'preview-status';
-      previewStatus.textContent = 'タンパク質が生産されています（蛍光タンパク質は未検出）。';
+    } else if (hasDegradingEnzyme) {
+      previewStatus.className = 'preview-status ok';
+      previewStatus.textContent = '✅ 分解酵素が生成されています。';
+    
     } else {
       previewStatus.className = 'preview-status warn';
       previewStatus.textContent = '回路に遺伝子（タンパク質コーディング領域）がありません。';
-    }
+    } 
 
     previewChips.innerHTML = items.length
       ? items.map(it => '<span class="preview-chip">' + it.part.label + ': ' + it.Pss.toFixed(2) + '</span>').join('')
@@ -468,7 +473,7 @@
 
   // ---------- Tabs ----------
   const TUTORIAL_STEPS = [
-"Genochemy は、オリジナル微生物「Genomy」をプログラミングすることによって、遺伝子回路設計や合成生物学を体験できるソフトウェアです。\nビジュアルプログラミングの直感的なUIを採用しつつ、遺伝子回路設計でのモデリングと同様の水準の微分方程式シミュレーションを備えています。",
+"Genochemy は、オリジナル微生物「Genomy」をプログラミングすることによって、遺伝子回路設計や合成生物学を体験できるソフトウェアです。",
 "Genochemyアプリには4つの領域があります。\n塩基配列トレイ（左下）、プログラム（左上）、Genochemy Lab（右上）、情報タブと実行ボタン（右下）の4つです。",
 "トレイには塩基配列ブロックがあり、それぞれがプロモーター、タンパク質コーディング領域、ターミネーターなどという特定の役割を持つ配列を表しています。\nプロモーターブロックは青色で、矢印型の付属物が付いています。\nタンパク質コーディング領域は単純に細長い形をしています。\nターミネーターは赤色で、T字型の付属物があります。",
 "プログラムでは、塩基配列ブロックを組み合わせて、遺伝子回路を作成することができます。",
@@ -483,7 +488,7 @@
   ];
   let tutPage = 0;
 
-  const QUESTIONS = ['緑の生物','青色光が緑にする','キラーライト','薬剤中毒者の生物','NAND ゲート','短気な生物','青色光が無限に緑にする','緑から赤になる','Optopass Mini'];
+  const QUESTIONS = ["ステージ1:大腸菌に重油分解酵素を作らせよう","ステージ2:様々な分解酵素を比べてみよう(安定性が高いやつや分解速度が高いやつ)","ステージ3:分解酵素のいいところを組み合わせよう","ステージ4:細菌が重油貯蔵タンクに入ってしまった！特定のシグナル分子がないと死ぬようにしよう！",'Optopass Mini'];
 
   let activeTab = 'tutorial';
   let selectedProteinIdx = 0, selectedRnaIdx = 0;
