@@ -1,13 +1,17 @@
+<!--#region header  -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<!--スマホの表示幅あわせ-->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Genochemy（コピー）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Roboto+Mono:wght@400&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!--#endregion-->
+
 <style>
   *{box-sizing:border-box;}
   html,body{margin:0;height:100%;}
@@ -595,8 +599,8 @@
   }
 
   function analyze(){
-    const heads = [...blocks.values()].filter(b => !b.prev);
-    const chainsRaw = heads.map(walkChain).filter(seqArr => seqArr[0].part.cat === 'promoter');
+    const heads=[...blocks.values()].filter(b=>!b.prev);
+    const chainsRaw=heads.map(walkChain).filter(seqArr=>seqArr[0].part.cat==='promoter');
 
     // pass 1: regulator supply — treat promRepressor as unrepressed, promActivator as OFF (first-order approx)
     let repressorSupply = 0, activatorSupply = 0;
@@ -659,6 +663,8 @@
     return svg;
   }
 
+
+
   function runSimulation(){
     program.classList.add('running');
     runStatus.style.display = 'inline-block';
@@ -703,6 +709,7 @@
     let totalGFP = 0, totalKill = 0;
     const items = [];
     results.forEach((r, ci) => r.genes.forEach((g, gi) => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
+    const hasDegradingEnzyme = items.some(it => it.part.id === 'DegradingEnzyme');
     items.forEach(it => {
       if (it.part.kind === 'gene-visible') totalGFP += it.Pss;
       if (it.part.kind === 'gene-kill') totalKill += it.Pss;
@@ -722,13 +729,14 @@
     } else if (totalGFP > 0.1) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ GFPが発現し、Genomyが発光しています（発現量 ≈ ' + totalGFP.toFixed(2) + '）。';
-    } else if (items.length) {
-      previewStatus.className = 'preview-status';
-      previewStatus.textContent = 'タンパク質が生産されています（蛍光タンパク質は未検出）。';
+    } else if (hasDegradingEnzyme) {
+      previewStatus.className = 'preview-status ok';
+      previewStatus.textContent = '✅ 分解酵素が生成されています。';
+    
     } else {
       previewStatus.className = 'preview-status warn';
       previewStatus.textContent = '回路に遺伝子（タンパク質コーディング領域）がありません。';
-    }
+    } 
 
     previewChips.innerHTML = items.length
       ? items.map(it => '<span class="preview-chip">' + it.part.label + ': ' + it.Pss.toFixed(2) + '</span>').join('')
