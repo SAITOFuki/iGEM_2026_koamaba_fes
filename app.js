@@ -488,11 +488,22 @@
   ];
   let tutPage = 0;
 
-  const QUESTIONS = ["ステージ1:大腸菌に重油分解酵素を作らせよう","ステージ2:様々な分解酵素を比べてみよう(安定性が高いやつや分解速度が高いやつ)","ステージ3:分解酵素のいいところを組み合わせよう","ステージ4:細菌が重油貯蔵タンクに入ってしまった！特定のシグナル分子がないと死ぬようにしよう！",'Optopass Mini'];
+
+  //問題のページの内容
+  const QUESTIONS_STEPS = [
+"ステージ1:大腸菌に重油分解酵素を作らせよう\n20XX/XX/XX、重油を積んだ船が沈みました。重油は環境中で分解されにくく、海洋生物や人間の健康に悪影響を及ぼす可能性があります。\nそこで、Genochemyを使って大腸菌に重油分解酵素を作らせることにしました。\nまずは、重油分解酵素を作るための遺伝子回路を設計してみましょう。",
+"ステージ2:様々な分解酵素を比べてみよう(安定性が高いやつや分解速度が高いやつ)\n重油分解酵素には様々な種類があり、安定性や分解速度が異なります。\nそれぞれの分解酵素の特徴を理解し、どの分解酵素を使うか選択してみましょう。",
+"ステージ3:分解酵素のいいところを組み合わせよう\n分解酵素のいいところを組み合わせて、最強の酵素を作りましょう。\n安定性が高く、分解速度も速い酵素を作ることができれば、重油の分解効率が上がります。",
+"ステージ4:細菌が重油貯蔵タンクに入ってしまった！特定のシグナル分子がないと死ぬようにしよう！\n悪の組織の手によって細菌が盗み出され、重油貯蔵タンクに入れられてしまいました。\nこのままではタンク内の重油がつかえなくなってしまいます。\nそこで、特定のシグナル分子がないと死ぬように遺伝子回路を設計してみましょう。",
+'Optopass Mini'
+  ];
+  let quePage=0
+
 
   let activeTab = 'tutorial';
   let selectedProteinIdx = 0, selectedRnaIdx = 0;
 
+  //チュートリアルのページを開いている部分
   function renderTutorial(){
     const text = TUTORIAL_STEPS[tutPage].replace(/\n/g, '<br>');
     tabContent.innerHTML =
@@ -553,10 +564,34 @@
   }
 
   function renderQuestions(){
+    const text=QUESTIONS_STEPS[quePage].replace(/\n/g, "<br>");
     tabContent.innerHTML =
-      '<div style="margin-bottom:10px; color:#666;">遺伝子回路クイズの一覧です（このコピー版ではタイトルのみの再現です）。</div>' +
-      '<ul class="q-list">' + QUESTIONS.map((q, i) => '<li><span class="q-num">' + (i + 1) + '</span>' + q + '</li>').join('') + '</ul>';
+      '<div>' + text + '</div>' +
+      '<div class="q-nav">' +
+        '<button id="qPrev" ' + (quePage === 0 ? 'disabled' : '') + '>← 前へ</button>' +
+        '<span class="q-page">' + (quePage + 1) + ' / ' + QUESTIONS_STEPS.length + '</span>' +
+        '<button id="qNext" ' + (quePage === QUESTIONS_STEPS.length - 1 ? 'disabled' : '') + '>次へ →</button>' +
+      '</div>';
+    const prev = document.getElementById('qPrev'), next = document.getElementById('qNext');
+    if (prev) prev.addEventListener('click', () => { quePage--; renderQuestions(); });
+    if (next) next.addEventListener('click', () => { quePage++; renderQuestions(); });
   }
+
+  /*function renderTutorial(){
+    const text = TUTORIAL_STEPS[tutPage].replace(/\n/g, '<br>');
+    tabContent.innerHTML =
+      '<div>' + text + '</div>' +
+      '<div class="tut-nav">' +
+        '<button id="tutPrev" ' + (tutPage === 0 ? 'disabled' : '') + '>← 前へ</button>' +
+        '<span class="tut-page">' + (tutPage + 1) + ' / ' + TUTORIAL_STEPS.length + '</span>' +
+        '<button id="tutNext" ' + (tutPage === TUTORIAL_STEPS.length - 1 ? 'disabled' : '') + '>次へ →</button>' +
+      '</div>';
+    const prev = document.getElementById('tutPrev'), next = document.getElementById('tutNext');
+    if (prev) prev.addEventListener('click', () => { tutPage--; renderTutorial(); });
+    if (next) next.addEventListener('click', () => { tutPage++; renderTutorial(); });
+  } */
+
+
 
   function renderLoad(){
     tabContent.innerHTML =
