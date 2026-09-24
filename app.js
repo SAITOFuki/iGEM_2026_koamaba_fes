@@ -22,12 +22,23 @@
   // rank governs valid chain ordering: promoter(0) -> genes/seq(1) -> terminator(2)
   const RANK = { promoter:0, gene:1, seq:1, terminator:2 };
 
+  // Enzyme kinetics: kcat = per-unit-protein oil degradation rate (catalytic power),
+  // decayP = protein degradation rate (LOW decayP = stable/long-lived protein).
+  // These two form the trade-off the player explores in stage 2.
   const PARTS = [
     { id:'promConst1',      shape:'promoter',  cat:'promoter', kind:'prom-const',     label:'常に発現',              short:'常時発現',   desc:'常に一定の割合で下流を転写します。' },
     { id:'promRepressor',   shape:'promoter',  cat:'promoter', kind:'prom-repressor', label:'リプレッサー抑制',       short:'抑制プロモーター', desc:'活性化されたリプレッサーが結合すると下流の転写が抑制されます。' },
     { id:'promActivator',   shape:'promoter',  cat:'promoter', kind:'prom-activator', label:'アクチベーター促進',     short:'促進プロモーター', desc:'活性化されたアクチベーターが結合すると下流の転写が促進されます。' },
+    { id:'promSignalOff',   shape:'promoter',  cat:'promoter', kind:'prom-signal-off',label:'シグナル分子で抑制',     short:'シグナル抑制', desc:'シグナル分子（Labのスライダーで調整）があると下流の転写が<b>止まります</b>。シグナルが無いと転写されます。キルスイッチと組み合わせる封じ込め回路の定番です。' },
+    { id:'promSignalOn',    shape:'promoter',  cat:'promoter', kind:'prom-signal-on', label:'シグナル分子で発現',     short:'シグナル発現', desc:'シグナル分子（Labのスライダーで調整）があるときだけ下流が転写されます。' },
     { id:'visiFluorescence',shape:'visible',   cat:'gene',     kind:'gene-visible',   label:'蛍光タンパク質遺伝子',   short:'GFP',        desc:'蛍光を発するタンパク質です。' },
-    { id:"DegradingEnzyme",shape:"visible",    cat:"gene",     kind:"none",           label:"分解酵素遺伝子",        short:"分解酵素",    desc:"分解酵素"},
+    { id:'DegradingEnzyme', shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'重油分解酵素遺伝子（標準）', short:'分解酵素', desc:'重油を分解する酵素です。分解速度・安定性ともに標準的なバランス型。',
+      kcat:4.0, decayP:0.30 },
+    { id:'enzFast',         shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'高速分解酵素遺伝子',     short:'高速酵素',   desc:'1分子あたりの分解速度がとても速い酵素です。ただしタンパク質としては<b>壊れやすく</b>、細胞内に溜まりません。',
+      kcat:9.0, decayP:1.00 },
+    { id:'enzStable',       shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'安定分解酵素遺伝子',     short:'安定酵素',   desc:'分解速度は遅いものの、<b>とても壊れにくい</b>酵素です。時間が経つほど細胞内に大量に蓄積します。',
+      kcat:1.5, decayP:0.10 },
+    { id:'seqLinker',       shape:'meta',      cat:'seq',      kind:'seq-linker',     label:'リンカー配列',           short:'リンカー',    desc:'2つの酵素遺伝子の<b>間</b>に挟むと、両者が1本の「融合タンパク質」としてつながって翻訳されます。速い酵素の触媒ドメインと、壊れにくい酵素の安定ドメインを組み合わせられます。' },
     { id:'ctrlRepressor',   shape:'control',   cat:'gene',     kind:'gene-repressor', label:'リプレッサー遺伝子',     short:'抑制遺伝子',  desc:'プロモーターの転写を抑制します。' },
     { id:'ctrlActivator',   shape:'control',   cat:'gene',     kind:'gene-activator', label:'アクチベーター遺伝子',   short:'促進遺伝子',  desc:'プロモーターの転写を促進します。' },
     { id:'term1',           shape:'terminator',cat:'terminator',kind:'terminator',    label:'ターミネーター',         short:'ターミネーター', desc:'転写を終了します。これ以降のブロックは転写されません。' },
@@ -39,6 +50,16 @@
 
   const TAB_OVERLAP = 14;
   const DECAY_M = 0.9, DECAY_P = 0.3, K_TL = 1.2;
+
+  // ---- Oil spill model ----
+  // Michaelis-Menten: dO/dt = -Vmax * O/(KM + O), with Vmax = Σ kcat_i * P_i(t).
+  const OIL_INIT = 1500, OIL_KM = 300;
+  // Fusion protein: inherits the best catalytic rate and the best stability of its two
+  // parents, with a small penalty on each for the folding/linker cost of a real fusion.
+  const FUSION_KCAT_PENALTY = 0.85, FUSION_DECAY_PENALTY = 1.15;
+
+  function partDecay(part){ return part.decayP != null ? part.decayP : DECAY_P; }
+  function partKcat(part){ return part.kcat != null ? part.kcat : 0; }
 
   const program = document.getElementById('program');
   const programHint = document.getElementById('programHint');
@@ -55,6 +76,7 @@
   const previewStatus = document.getElementById('previewStatus');
   const previewChips = document.getElementById('previewChips');
   const previewChartWrap = document.getElementById('previewChartWrap');
+  const oilPanel = document.getElementById('oilPanel');
   const drugA = document.getElementById('drugA');
   const drugAVal = document.getElementById('drugAVal');
   const blueLightSwitch = document.getElementById('blueLightSwitch');
@@ -70,8 +92,16 @@
     toggleRight.textContent = show ? 'Lab を隠す' : 'Lab を表示';
   });
 
-  // ---------- Environment controls (cosmetic — default circuits don't depend on drug/light, matching the real tutorial's own note) ----------
+  // ---------- Environment controls ----------
+  // The signal-molecule slider is a real simulation input: it drives the
+  // prom-signal-off / prom-signal-on promoters (see signalFactor).
+  // Light switches remain cosmetic, matching the original tutorial's own note.
+  function signalLevel(){ return Number(drugA.value) / 100; }
   drugA.addEventListener('input', () => { drugAVal.textContent = drugA.value; });
+  drugA.addEventListener('change', () => {
+    // Re-run so the player immediately sees the containment circuit respond.
+    if (blocks.size) runSimulation();
+  });
   let blueOn = false, redOn = false;
   blueLightSwitch.addEventListener('click', () => {
     blueOn = !blueOn;
@@ -300,29 +330,107 @@
     return seqArr;
   }
 
-  function eulerRun(k_tx, eff, genes){
-    const dt = 0.05, steps = 400, sampleEvery = 10;
+  const SIM_DT = 0.05, SIM_STEPS = 700, SIM_SAMPLE_EVERY = 10;
+  const SAMPLE_DT = SIM_DT * SIM_SAMPLE_EVERY;
+
+  function eulerRun(k_tx, eff, parts){
     let M = 0;
-    const proteins = genes.map(() => ({ P: 0, arr: [] }));
+    // Each protein decays at its own rate, so a "stable" enzyme accumulates far higher.
+    const proteins = parts.map(p => ({ P: 0, arr: [], decay: partDecay(p) }));
     const mArr = [];
-    for (let i = 0; i <= steps; i++) {
-      if (i % sampleEvery === 0) {
+    for (let i = 0; i <= SIM_STEPS; i++) {
+      if (i % SIM_SAMPLE_EVERY === 0) {
         mArr.push(M);
         proteins.forEach(pr => pr.arr.push(pr.P));
       }
       const dM = (k_tx * eff) - DECAY_M * M;
-      M += dM * dt;
+      M += dM * SIM_DT;
       proteins.forEach(pr => {
-        const dP = K_TL * M - DECAY_P * pr.P;
-        pr.P += dP * dt;
+        const dP = K_TL * M - pr.decay * pr.P;
+        pr.P += dP * SIM_DT;
       });
     }
     const Mss = (k_tx * eff) / DECAY_M;
-    const Pss = (K_TL * Mss) / DECAY_P;
-    return { mArr, proteins, Mss, Pss };
+    return { mArr, proteins, Mss };
+  }
+
+  // ---- Fusion proteins: [enzyme] - [linker] - [enzyme] is translated as one chain ----
+  function makeFusionPart(a, b){
+    const kcat  = Math.max(partKcat(a), partKcat(b)) * FUSION_KCAT_PENALTY;
+    const decay = Math.min(partDecay(a), partDecay(b)) * FUSION_DECAY_PENALTY;
+    const fast   = partKcat(a)  >= partKcat(b)  ? a : b;
+    const stable = partDecay(a) <= partDecay(b) ? a : b;
+    return {
+      id: 'fusion:' + a.id + '+' + b.id,
+      shape:'visible', cat:'gene', kind:'gene-degrader', isFusion:true,
+      label: a.short + '＋' + b.short + ' 融合酵素',
+      short: '融合酵素',
+      desc: '「' + fast.label + '」の触媒ドメインと「' + stable.label + '」の安定ドメインを' +
+            'リンカーでつないだ融合タンパク質です。分解速度 ' + kcat.toFixed(2) +
+            ' ／ 分解されにくさ（decay） ' + decay.toFixed(2) + '。',
+      kcat, decayP: decay
+    };
+  }
+
+  // Collapses gene blocks in a transcript into the parts actually translated.
+  // A linker sitting between two genes fuses them; a dangling linker is ignored.
+  function resolveTranslatedParts(seqArr){
+    const coding = seqArr.filter(b => b.part.cat === 'gene' || b.part.kind === 'seq-linker');
+    const out = [];
+    for (let i = 0; i < coding.length; i++) {
+      const part = coding[i].part;
+      if (part.kind === 'seq-linker') continue;
+      const nextEl = coding[i + 1], afterEl = coding[i + 2];
+      if (nextEl && nextEl.part.kind === 'seq-linker' && afterEl && afterEl.part.cat === 'gene') {
+        out.push(makeFusionPart(part, afterEl.part));
+        i += 2;
+        continue;
+      }
+      out.push(part);
+    }
+    return out;
+  }
+
+  // Integrates the oil spill against the whole cell's enzyme pool over the sampled
+  // time grid, so fast-but-unstable and slow-but-stable enzymes differ over time.
+  function simulateOil(results){
+    const nSamples = SIM_STEPS / SIM_SAMPLE_EVERY + 1;
+    const enzymes = [];
+    results.forEach(r => r.genes.forEach(g => {
+      if (partKcat(g.part) > 0) enzymes.push(g);
+    }));
+    let O = OIL_INIT;
+    const series = [O], SUB = 10, subDt = SAMPLE_DT / SUB;
+    for (let s = 0; s < nSamples - 1; s++) {
+      let Vmax = 0;
+      enzymes.forEach(g => { Vmax += partKcat(g.part) * (g.arr[s] || 0); });
+      for (let k = 0; k < SUB; k++) {
+        O -= Vmax * (O / (OIL_KM + O)) * subDt;
+        if (O < 0) O = 0;
+      }
+      series.push(O);
+    }
+    const Vfinal = enzymes.reduce((sum, g) => sum + partKcat(g.part) * (g.arr[g.arr.length - 1] || 0), 0);
+    return {
+      series, initial: OIL_INIT, final: O,
+      removed: OIL_INIT - O,
+      removedPct: (OIL_INIT - O) / OIL_INIT * 100,
+      capacity: Vfinal,
+      hasEnzyme: enzymes.length > 0
+    };
+  }
+
+  const SIGNAL_K = 0.35, HILL_N = 2;
+
+  // Signal-molecule response (the Lab slider), shared by the ODE and the 2D particle sim.
+  function signalFactor(kind, signal){
+    if (kind === 'prom-signal-off') return 1 / (1 + Math.pow(signal / SIGNAL_K, HILL_N));
+    if (kind === 'prom-signal-on')  return Math.pow(signal, HILL_N) / (Math.pow(SIGNAL_K, HILL_N) + Math.pow(signal, HILL_N));
+    return null;
   }
 
   function analyze(){
+    const signal = signalLevel();
     const heads=[...blocks.values()].filter(b=>!b.prev);
     const chainsRaw=heads.map(walkChain).filter(seqArr=>seqArr[0].part.cat==='promoter');
 
@@ -330,40 +438,44 @@
     let repressorSupply = 0, activatorSupply = 0;
     const provisional = chainsRaw.map(seqArr => {
       const promPart = seqArr[0].part;
-      const genes = seqArr.filter(b => b.part.cat === 'gene');
+      const parts = resolveTranslatedParts(seqArr);
       const lastB = seqArr[seqArr.length - 1];
       const eff = lastB.part.kind === 'terminator' ? 0.95 : 0.3;
+      const sig = signalFactor(promPart.kind, signal);
       let k_tx_base;
-      if (promPart.kind === 'prom-const') k_tx_base = 1.5;
+      if (sig !== null) k_tx_base = 1.5 * sig;
+      else if (promPart.kind === 'prom-const') k_tx_base = 1.5;
       else if (promPart.kind === 'prom-repressor') k_tx_base = 1.5; // provisional: unrepressed
       else k_tx_base = 0; // prom-activator provisional: off
-      return { seqArr, promPart, genes, eff, k_tx_base };
+      return { seqArr, promPart, parts, eff, k_tx_base };
     });
     provisional.forEach(c => {
-      const sim = eulerRun(c.k_tx_base, c.eff, c.genes);
-      c.genes.forEach((g, i) => {
-        if (g.part.kind === 'gene-repressor') repressorSupply += sim.proteins[i].P;
-        if (g.part.kind === 'gene-activator') activatorSupply += sim.proteins[i].P;
+      const sim = eulerRun(c.k_tx_base, c.eff, c.parts);
+      c.parts.forEach((p, i) => {
+        if (p.kind === 'gene-repressor') repressorSupply += sim.proteins[i].P;
+        if (p.kind === 'gene-activator') activatorSupply += sim.proteins[i].P;
       });
     });
 
     // pass 2: final k_tx using regulator levels, then real per-chain simulation
     const K = 2, N = 2;
     const results = provisional.map(c => {
+      const sig = signalFactor(c.promPart.kind, signal);
       let k_tx;
-      if (c.promPart.kind === 'prom-const') k_tx = 1.5;
+      if (sig !== null) k_tx = 1.5 * sig;
+      else if (c.promPart.kind === 'prom-const') k_tx = 1.5;
       else if (c.promPart.kind === 'prom-repressor') k_tx = 1.5 / (1 + Math.pow(repressorSupply / K, N));
       else k_tx = 1.5 * (Math.pow(activatorSupply, N) / (Math.pow(K, N) + Math.pow(activatorSupply, N)));
-      const sim = eulerRun(k_tx, c.eff, c.genes);
+      const sim = eulerRun(k_tx, c.eff, c.parts);
       const warn = c.seqArr[c.seqArr.length - 1].part.kind !== 'terminator'
         ? 'ターミネーターが無いため転写が終わらず、発現が不安定です。' : null;
       return {
         promLabel: c.promPart.label,
         promKind: c.promPart.kind,
-        genes: c.genes.map((g, i) => ({
-          part: g.part, Pss: sim.proteins[i].P, arr: sim.proteins[i].arr
+        genes: c.parts.map((p, i) => ({
+          part: p, Pss: sim.proteins[i].P, arr: sim.proteins[i].arr
         })),
-        mRNAName: c.genes.map(g => g.part.label).join(' + ') || '(遺伝子なし)',
+        mRNAName: c.parts.map(p => p.label).join(' + ') || '(遺伝子なし)',
         mArr: sim.mArr, Mss: sim.Mss, k_tx, eff: c.eff, warn
       };
     });
@@ -389,6 +501,24 @@
 
 
 
+  let lastOil = null, lastCtx = null;
+
+  // Everything the stage judges need, derived from one run.
+  function buildRunContext(results, oil){
+    const items = [];
+    results.forEach(r => r.genes.forEach(g => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
+    let totalKill = 0;
+    items.forEach(it => { if (it.part.kind === 'gene-kill') totalKill += it.Pss; });
+    return {
+      results, oil, items,
+      signal: signalLevel(),
+      hasFusion: items.some(it => it.part.isFusion),
+      hasKillGene: items.some(it => it.part.kind === 'gene-kill'),
+      dead: totalKill > 1.2,
+      noTerminator: results.some(r => r.warn)
+    };
+  }
+
   function runSimulation(){
     program.classList.add('running');
     runStatus.style.display = 'inline-block';
@@ -396,6 +526,9 @@
     setTimeout(() => {
       program.classList.remove('running');
       lastResults = analyze();
+      lastOil = simulateOil(lastResults);
+      lastCtx = buildRunContext(lastResults, lastOil);
+      recordStageEvidence(lastCtx);
       applyGenomyState(lastResults);
       renderPreview(lastResults);
       initMDParticles(lastResults);
@@ -404,6 +537,18 @@
     }, 650);
   }
   runBtn.addEventListener('click', runSimulation);
+
+  function clearProgram(){
+    blocks.forEach(b => b.el.remove());
+    blocks.clear();
+    lastResults = []; lastOil = null; lastCtx = null;
+    updateHint();
+    renderPreview(lastResults);
+    setBacteriumVisual(bacteriumImg, 0, 0);
+    runStatus.style.display = 'none';
+    refreshActiveTab();
+  }
+  document.getElementById('clearBtn').addEventListener('click', clearProgram);
 
   function setBacteriumVisual(img, totalKill, totalGFP){
     if (totalKill > 1.2) {
@@ -429,15 +574,31 @@
 
   const CHART_PALETTE = ['#4c97ff', '#69f0ae', '#f9a825', '#ff6680', '#9966ff', '#00bcd4'];
 
+  function renderOilPanel(oil, dead){
+    if (!oil) { oilPanel.innerHTML = '<div class="oil-empty">未実行</div>'; return; }
+    const pct = Math.max(0, Math.min(100, oil.final / oil.initial * 100));
+    const removed = oil.removedPct;
+    const cls = removed >= 90 ? 'great' : removed >= 50 ? 'good' : 'bad';
+    oilPanel.innerHTML =
+      '<div class="oil-sea"><div class="oil-slick" style="height:' + pct.toFixed(1) + '%"></div></div>' +
+      '<div class="oil-readout ' + cls + '">残存 ' + oil.final.toFixed(1) + ' / ' + oil.initial +
+        '　<b>分解率 ' + removed.toFixed(1) + '%</b></div>' +
+      (oil.hasEnzyme
+        ? '<div class="oil-sub">分解能力 Vmax ≈ ' + oil.capacity.toFixed(2) + (dead ? '（細胞は死滅済み）' : '') + '</div>'
+        : '<div class="oil-sub">分解酵素がありません。</div>') +
+      svgChart([oil.series], ['#8d6e63']);
+  }
+
   function renderPreview(results){
     let totalGFP = 0, totalKill = 0;
     const items = [];
     results.forEach((r, ci) => r.genes.forEach((g, gi) => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
-    const hasDegradingEnzyme = items.some(it => it.part.id === 'DegradingEnzyme');
+    const hasDegradingEnzyme = items.some(it => partKcat(it.part) > 0);
     items.forEach(it => {
       if (it.part.kind === 'gene-visible') totalGFP += it.Pss;
       if (it.part.kind === 'gene-kill') totalKill += it.Pss;
     });
+    const dead = totalKill > 1.2;
     setBacteriumVisual(previewBacterium, totalKill, totalGFP);
 
     if (results.length === 0) {
@@ -445,22 +606,31 @@
       previewStatus.textContent = '回路を組んで「実行」を押すと、ここに結果が表示されます。';
       previewChips.innerHTML = '';
       previewChartWrap.innerHTML = '';
+      renderOilPanel(null);
       return;
     }
-    if (totalKill > 1.2) {
+    if (dead) {
       previewStatus.className = 'preview-status warn';
       previewStatus.textContent = '💀 キルスイッチが作動し、Genomyは死滅しました。';
+    } else if (hasDegradingEnzyme) {
+      previewStatus.className = 'preview-status ok';
+      previewStatus.textContent = '✅ 重油分解酵素を生産中です（分解率 ' + (lastOil ? lastOil.removedPct.toFixed(1) : '0') + '%）。';
     } else if (totalGFP > 0.1) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ GFPが発現し、Genomyが発光しています（発現量 ≈ ' + totalGFP.toFixed(2) + '）。';
-    } else if (hasDegradingEnzyme) {
+    } else if (items.some(it => it.part.kind === 'gene-kill')) {
+      // Kill gene present but below the lethal threshold — the containment circuit is holding.
       previewStatus.className = 'preview-status ok';
-      previewStatus.textContent = '✅ 分解酵素が生成されています。';
-    
+      previewStatus.textContent = '🛡️ キルスイッチは抑えられていて、Genomyは生存しています。';
+    } else if (items.length) {
+      previewStatus.className = 'preview-status warn';
+      previewStatus.textContent = '遺伝子は組み込まれていますが、いまの条件ではほとんど発現していません。';
     } else {
       previewStatus.className = 'preview-status warn';
       previewStatus.textContent = '回路に遺伝子（タンパク質コーディング領域）がありません。';
-    } 
+    }
+
+    renderOilPanel(lastOil, dead);
 
     previewChips.innerHTML = items.length
       ? items.map(it => '<span class="preview-chip">' + it.part.label + ': ' + it.Pss.toFixed(2) + '</span>').join('')
@@ -489,15 +659,120 @@
   let tutPage = 0;
 
 
-  //問題のページの内容
-  const QUESTIONS_STEPS = [
-"<strong>ステージ1:大腸菌に重油分解酵素を作らせよう</strong>\n20XX/XX/XX、重油を積んだ船が沈没しました。重油は環境中で分解されにくく、海洋生物や人間の健康に悪影響を及ぼす可能性があります。\nそこで、Genochemyを使って大腸菌に重油分解酵素を作らせることにしました。\nまずは、重油分解酵素を作るための遺伝子回路を設計してみましょう。",
-"<strong>ステージ2:様々な分解酵素を比べてみよう</strong>\n重油分解酵素には様々な種類があり、安定性や分解速度が異なります。\nそれぞれの分解酵素の特徴を理解し、どの分解酵素を使うか選択してみましょう。",
-"<strong>ステージ3:分解酵素のいいところを組み合わせよう</strong>\n分解酵素のいいところを組み合わせて、最強の酵素を作りましょう。\n安定性が高く、分解速度も速い酵素を作ることができれば、重油の分解効率が上がります。",
-"<strong>ステージ4:細菌が重油貯蔵タンクに入ってしまった！特定のシグナル分子がないと死ぬようにしよう！</strong>\n悪の組織が細菌を盗み出し、重油貯蔵タンクに入れようとしているという噂が流れてきました。\nこのままではタンク内の重油がつかえなくなってしまいます。\nそこで、特定のシグナル分子がないと死ぬように遺伝子回路を設計してみましょう。",
-'Optopass Mini'
+  // ---------- Stages ----------
+  // Each stage judges the most recent run. Stages 2 and 4 are inherently
+  // multi-run comparisons, so they accumulate evidence in `stageState`.
+  const stageState = {
+    enzymeRuns: {},        // partId -> { label, removedPct, capacity, Pss }
+    fusionBest: null,      // best removedPct achieved with a fusion enzyme
+    killWithSignal: null,  // { signal, dead } observed at high signal
+    killNoSignal: null     // { signal, dead } observed at zero signal
+  };
+  const cleared = {};
+
+  const SIGNAL_HIGH = 0.6, SIGNAL_LOW = 0.05;
+
+  const STAGES = [
+    {
+      title: 'ステージ1: 大腸菌に重油分解酵素を作らせよう',
+      story: '20XX/XX/XX、重油を積んだ船が沈没しました。重油は環境中で分解されにくく、海洋生物や人間の健康に悪影響を及ぼす可能性があります。\n' +
+             'そこで、Genochemyを使って大腸菌に重油分解酵素を作らせることにしました。\nまずは、重油分解酵素を作るための遺伝子回路を設計してみましょう。',
+      goal: '「常に発現」→「重油分解酵素遺伝子（標準）」→「ターミネーター」をつなげて実行し、海水の重油を <b>25%以上</b> 分解する。',
+      judge(ctx){
+        if (!ctx.results.length) return { state:'todo', msg:'まだ回路がありません。トレイからブロックをつなげて「実行」を押しましょう。' };
+        if (!ctx.oil.hasEnzyme) return { state:'fail', msg:'分解酵素が作られていません。プロモーターとターミネーターの<b>間</b>に「重油分解酵素遺伝子」を入れましょう。' };
+        if (ctx.noTerminator) return { state:'fail', msg:'重油は' + ctx.oil.removedPct.toFixed(0) + '%しか分解できませんでした。ターミネーターが無いと転写が最後まで安定しません（転写効率が30%に落ちています）。回路の最後に「ターミネーター」をつなげましょう。' };
+        if (ctx.oil.removedPct >= 25) return { state:'pass', msg:'重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました！大腸菌が分解酵素を作れています。' };
+        return { state:'fail', msg:'重油の分解は ' + ctx.oil.removedPct.toFixed(1) + '% 止まりでした。酵素の発現量が足りないようです。' };
+      }
+    },
+    {
+      title: 'ステージ2: 様々な分解酵素を比べてみよう',
+      story: '重油分解酵素には様々な種類があり、<b>安定性</b>と<b>分解速度</b>が異なります。\n' +
+             '「高速分解酵素」は1分子あたりの分解が速い代わりにすぐ壊れてしまい、「安定分解酵素」は遅い代わりに細胞内にどんどん溜まっていきます。\n' +
+             '2種類を別々に試して、グラフの形の違いを見比べてみましょう。',
+      goal: '「高速分解酵素遺伝子」と「安定分解酵素遺伝子」を<b>それぞれ1回ずつ</b>回路に組んで実行し、結果を比較する。',
+      judge(ctx){
+        const f = stageState.enzymeRuns['enzFast'], s = stageState.enzymeRuns['enzStable'];
+        if (f && s) {
+          const winner = f.removedPct >= s.removedPct ? f : s;
+          return { state:'pass', msg:'2種類とも試せました！このシミュレーション時間では <b>' + winner.label + '</b> の方が多く分解できています（' +
+            f.label + ': ' + f.removedPct.toFixed(1) + '% / ' + s.label + ': ' + s.removedPct.toFixed(1) + '%）。' +
+            '高速酵素は立ち上がりが速く、安定酵素は後半で伸びます。下の記録で見比べてみましょう。' };
+        }
+        const missing = [];
+        if (!f) missing.push('高速分解酵素');
+        if (!s) missing.push('安定分解酵素');
+        return { state:'todo', msg:'あと <b>' + missing.join('・') + '</b> を試してみましょう（1回ずつ別々に組んで実行します）。' };
+      }
+    },
+    {
+      title: 'ステージ3: 分解酵素のいいところを組み合わせよう',
+      story: '高速酵素の「速さ」と、安定酵素の「壊れにくさ」。どちらも捨てがたいなら、<b>くっつけてしまえばいい</b>のです。\n' +
+             '実際の合成生物学でも、2つのタンパク質の遺伝子を短い「リンカー配列」でつないで1本の融合タンパク質として作らせる手法がよく使われます。\n' +
+             'トレイの「リンカー配列」を2つの酵素遺伝子の<b>間</b>に挟んでみましょう。',
+      goal: '「高速分解酵素遺伝子」→「リンカー配列」→「安定分解酵素遺伝子」の順につないで融合酵素を作り、重油を <b>85%以上</b> 分解する。',
+      judge(ctx){
+        if (!ctx.results.length) return { state:'todo', msg:'まだ回路がありません。' };
+        if (!ctx.hasFusion) return { state:'todo', msg:'まだ融合酵素ができていません。2つの酵素遺伝子の<b>間</b>に「リンカー配列」を挟むと融合します（酵素・リンカー・酵素の順）。' };
+        if (ctx.oil.removedPct >= 85) return { state:'pass', msg:'融合酵素が完成し、重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました！速さと安定性を両立できています。' };
+        return { state:'fail', msg:'融合酵素はできていますが、分解は ' + ctx.oil.removedPct.toFixed(1) + '% でした。速い酵素と安定な酵素の組み合わせになっているか確認しましょう。' };
+      }
+    },
+    {
+      title: 'ステージ4: 細菌が重油貯蔵タンクに入ってしまった！',
+      story: '悪の組織が細菌を盗み出し、重油貯蔵タンクに入れようとしているという噂が流れてきました。\nこのままではタンク内の重油が使えなくなってしまいます。\n' +
+             'そこで、<b>決められたシグナル分子がある場所でしか生きられない</b>ようにします。海の現場にはシグナル分子を撒いておき、盗まれた先には無い——という封じ込め（バイオコンテインメント）の考え方です。',
+      goal: '「シグナル分子で抑制」→「キルスイッチ遺伝子」→「ターミネーター」をつなぎ、Labのシグナル分子スライダーを動かして<b>シグナルあり=生存／シグナルなし=死滅</b>の両方を確認する。',
+      judge(ctx){
+        const on = stageState.killWithSignal, off = stageState.killNoSignal;
+        if (on && off && !on.dead && off.dead) {
+          return { state:'pass', msg:'封じ込め回路が完成しました！シグナル分子があるときだけ生存し、無い場所では自滅します。' };
+        }
+        const todo = [];
+        if (!on || on.dead) todo.push('シグナル分子を高く（60以上）して<b>生存</b>すること');
+        if (!off || !off.dead) todo.push('シグナル分子を0にして<b>死滅</b>すること');
+        return { state: (on || off) ? 'fail' : 'todo', msg:'あと確認が必要です: ' + todo.join(' / ') + '。Labを開いてスライダーを動かすと自動で再実行されます。' };
+      }
+    },
+    {
+      title: 'おまけ: Optopass Mini',
+      story: 'iGEM UTokyo 2022 のプロジェクト「Optopass」を模した回路です。「読み込み」タブから読み込めます。',
+      goal: '自由に回路を組んで遊んでみましょう。',
+      judge(){ return { state:'todo', msg:'自由課題です。' }; }
+    }
   ];
-  let quePage=0
+  let quePage = 0;
+
+  // Records evidence from each run for the multi-run stages.
+  function recordStageEvidence(ctx){
+    ctx.items.forEach(it => {
+      if (partKcat(it.part) <= 0) return;
+      if (it.part.isFusion) {
+        if (!stageState.fusionBest || ctx.oil.removedPct > stageState.fusionBest.removedPct) {
+          stageState.fusionBest = {
+            label: it.part.label, removedPct: ctx.oil.removedPct,
+            kcat: partKcat(it.part), decayP: partDecay(it.part)
+          };
+        }
+        return;
+      }
+      const prev = stageState.enzymeRuns[it.part.id];
+      if (!prev || ctx.oil.removedPct > prev.removedPct) {
+        stageState.enzymeRuns[it.part.id] = {
+          label: it.part.label, removedPct: ctx.oil.removedPct,
+          capacity: ctx.oil.capacity, Pss: it.Pss,
+          kcat: partKcat(it.part), decayP: partDecay(it.part)
+        };
+      }
+    });
+
+    if (ctx.hasKillGene) {
+      const record = { signal: ctx.signal, dead: ctx.dead };
+      if (ctx.signal >= SIGNAL_HIGH) stageState.killWithSignal = record;
+      else if (ctx.signal <= SIGNAL_LOW) stageState.killNoSignal = record;
+    }
+  }
 
 
   let activeTab = 'tutorial';
@@ -563,18 +838,52 @@
       svgChart([r.mArr], ['#888']);
   }
 
+  const VERDICT_ICON = { pass:'✅', fail:'❌', todo:'🔬' };
+
+  function enzymeComparisonTable(){
+    const rows = Object.values(stageState.enzymeRuns);
+    if (stageState.fusionBest) {
+      rows.push(Object.assign({ fusion:true }, stageState.fusionBest));
+    }
+    if (!rows.length) return '';
+    rows.sort((a, b) => b.removedPct - a.removedPct);
+    return '<div class="stage-record"><h4>これまでの記録（酵素ごとのベスト）</h4><table class="stage-table">' +
+      '<tr><th>酵素</th><th>分解速度<br>kcat</th><th>壊れやすさ<br>decay</th><th>分解率</th></tr>' +
+      rows.map(r => '<tr' + (r.fusion ? ' class="fusion-row"' : '') + '><td>' + r.label + '</td>' +
+        '<td>' + (r.kcat != null ? r.kcat.toFixed(2) : '—') + '</td>' +
+        '<td>' + (r.decayP != null ? r.decayP.toFixed(2) : '—') + '</td>' +
+        '<td><b>' + r.removedPct.toFixed(1) + '%</b></td></tr>').join('') +
+      '</table></div>';
+  }
+
   function renderQuestions(){
-    const text=QUESTIONS_STEPS[quePage].replace(/\n/g, "<br>");
+    const stage = STAGES[quePage];
+    const verdict = lastCtx ? stage.judge(lastCtx) : { state:'todo', msg:'回路を組んで「実行」を押すと、ここに判定が出ます。' };
+    if (verdict.state === 'pass') cleared[quePage] = true;
+
+    const dots = STAGES.map((s, i) =>
+      '<span class="stage-dot ' + (i === quePage ? 'current ' : '') + (cleared[i] ? 'cleared' : '') + '" data-i="' + i + '" title="' + s.title + '">' +
+        (cleared[i] ? '✓' : (i + 1)) + '</span>').join('');
+
     tabContent.innerHTML =
-      '<div>' + text + '</div>' +
+      '<div class="stage-dots">' + dots + '</div>' +
+      '<h3 class="stage-title">' + stage.title + (cleared[quePage] ? ' <span class="stage-clear-badge">クリア</span>' : '') + '</h3>' +
+      '<div class="stage-story">' + stage.story.replace(/\n/g, '<br>') + '</div>' +
+      '<div class="stage-goal"><span class="stage-goal-tag">目標</span>' + stage.goal + '</div>' +
+      '<div class="stage-verdict ' + verdict.state + '">' + VERDICT_ICON[verdict.state] + ' ' + verdict.msg + '</div>' +
+      (quePage === 1 || quePage === 2 ? enzymeComparisonTable() : '') +
       '<div class="q-nav">' +
         '<button id="qPrev" ' + (quePage === 0 ? 'disabled' : '') + '>← 前へ</button>' +
-        '<span class="q-page">' + (quePage + 1) + ' / ' + QUESTIONS_STEPS.length + '</span>' +
-        '<button id="qNext" ' + (quePage === QUESTIONS_STEPS.length - 1 ? 'disabled' : '') + '>次へ →</button>' +
+        '<span class="q-page">' + (quePage + 1) + ' / ' + STAGES.length + '</span>' +
+        '<button id="qNext" ' + (quePage === STAGES.length - 1 ? 'disabled' : '') + '>次へ →</button>' +
       '</div>';
+
     const prev = document.getElementById('qPrev'), next = document.getElementById('qNext');
     if (prev) prev.addEventListener('click', () => { quePage--; renderQuestions(); });
     if (next) next.addEventListener('click', () => { quePage++; renderQuestions(); });
+    tabContent.querySelectorAll('.stage-dot').forEach(el => {
+      el.addEventListener('click', () => { quePage = Number(el.dataset.i); renderQuestions(); });
+    });
   }
 
   /*function renderTutorial(){
@@ -608,7 +917,7 @@
   const SPECIES_COLOR = {
     rnap: '#3f6fd6', ribosome: '#8e5cf7', mrna: '#f5a623',
     'gene-visible': '#39d98a', 'gene-repressor': '#ff7043', 'gene-activator': '#26c6da',
-    'gene-recomb': '#a1887f', 'gene-kill': '#e53935'
+    'gene-recomb': '#a1887f', 'gene-kill': '#e53935', 'gene-degrader': '#8d6e63'
   };
   const MD_D = { rnap: 4200, ribosome: 3000, mrna: 2600, protein: 3600 };
   const MD_RADIUS = { rnap: 4, ribosome: 5.5, mrna: 3.2, protein: 4 };
@@ -674,7 +983,9 @@
     mdPromoters.forEach(prom => {
       if (mdSimTime - prom.lastFire < MD_REFRACTORY) return;
       let k_tx;
-      if (prom.kind === 'prom-repressor') k_tx = 1.5 / (1 + Math.pow(repressorCount / MD_KMD, 2));
+      const sig = signalFactor(prom.kind, signalLevel());
+      if (sig !== null) k_tx = 1.5 * sig;
+      else if (prom.kind === 'prom-repressor') k_tx = 1.5 / (1 + Math.pow(repressorCount / MD_KMD, 2));
       else if (prom.kind === 'prom-activator') k_tx = 1.5 * (Math.pow(activatorCount, 2) / (Math.pow(MD_KMD, 2) + Math.pow(activatorCount, 2)));
       else k_tx = 1.5;
       const nearby = mdParticles.some(p => p.type === 'rnap' && Math.hypot(p.x - prom.x, p.y - prom.y) < MD_BIND_R);
@@ -832,12 +1143,13 @@
     'gene-repressor': p3dFoldHelixBundle,
     'gene-activator': p3dFoldHelixBundle,
     'gene-recomb': p3dFoldGlobular,
-    'gene-kill': p3dFoldGlobular
+    'gene-kill': p3dFoldGlobular,
+    'gene-degrader': p3dFoldGlobular
   };
   const P3D_FOLD_NAME = {
     'gene-visible': 'βバレル型（GFP様）', 'gene-repressor': 'ヘリックス束型（DNA結合様）',
     'gene-activator': 'ヘリックス束型（DNA結合様）', 'gene-recomb': 'コンパクト球状',
-    'gene-kill': 'コンパクト球状'
+    'gene-kill': 'コンパクト球状', 'gene-degrader': '球状酵素型（触媒ポケット）'
   };
 
   function p3dTopology(native){
@@ -1198,6 +1510,7 @@
           (hasGene('gene-activator') ? '<span><i style="background:#26c6da"></i>アクチベーター</span>' : '') +
           (hasGene('gene-recomb') ? '<span><i style="background:#a1887f"></i>リコンビナーゼ</span>' : '') +
           (hasGene('gene-kill') ? '<span><i style="background:#e53935"></i>キルスイッチ</span>' : '') +
+          (hasGene('gene-degrader') ? '<span><i style="background:#8d6e63"></i>重油分解酵素</span>' : '') +
         '</div>' +
       '</div>';
     document.getElementById('mdResetBtn').addEventListener('click', () => { initMDParticles(lastResults); });
@@ -1239,6 +1552,7 @@
   }
 
   previewBacterium.src = BACT_IMG;
+  renderOilPanel(null);
   renderTutorial();
   updateHint();
 })();

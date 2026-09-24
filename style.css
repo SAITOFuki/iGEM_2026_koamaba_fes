@@ -176,8 +176,67 @@
   .p3d-row{display:flex; align-items:center; gap:8px; font-size:12px;}
   .p3d-row input[type=range]{width:140px;}
   .p3d-readouts{display:flex; gap:10px; flex-wrap:wrap;}
-  .p3d-readouts .chip{background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:5px 10px; font-size:11.5px; font-weight:700; color:var(--ink-soft);}
+  .p3d-readouts .chip{background:#f2f2f2; border:1px solid #ddd; border-radius:8px; padding:5px 10px; font-size:11.5px; font-weight:700; color:#555;}
   .p3d-protein-select{display:flex; gap:6px; flex-wrap:wrap;}
   .p3d-protein-select button{border:1px solid #aaa; background:#fff; border-radius:8px; padding:6px 11px; font-size:11.5px; font-weight:700; cursor:pointer; font-family:inherit;}
-  .p3d-protein-select button.active{background:var(--bc,#274690); color:#fff; border-color:transparent;}
+  .p3d-protein-select button.active{background:#274690; color:#fff; border-color:transparent;}
   .p3d-note{font-size:11px; color:#999; line-height:1.7;}
+
+  /* ---------- Oil spill panel (preview) ---------- */
+  #oilPanel{display:flex; flex-direction:column; gap:6px;}
+  .oil-empty{font-size:11.5px; color:#aaa;}
+  .oil-sea{
+    position:relative; height:54px; border-radius:8px; overflow:hidden; border:1px solid #cfd8dc;
+    background:linear-gradient(#bbdefb, #64b5f6);
+  }
+  .oil-slick{
+    position:absolute; left:0; bottom:0; width:100%;
+    background:linear-gradient(#5d4037, #3e2723); opacity:.92; transition:height .5s ease;
+  }
+  .oil-readout{font-size:11.5px; color:#555;}
+  .oil-readout.great{color:#0b7c4d;}
+  .oil-readout.good{color:#4a7c1f;}
+  .oil-readout.bad{color:#b45309;}
+  .oil-sub{font-size:10.5px; color:#999;}
+
+  /* ---------- Stage (問題) tab ---------- */
+  .stage-dots{display:flex; gap:6px; margin-bottom:10px;}
+  .stage-dot{
+    width:26px; height:26px; border-radius:50%; background:#eee; border:1px solid #ccc; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:700; color:#888;
+  }
+  .stage-dot.current{border-color:#111; color:#111;}
+  .stage-dot.cleared{background:#1de9b6; border-color:#0b9e80; color:#06412f;}
+  .stage-title{margin:0 0 8px; font-size:15px;}
+  .stage-clear-badge{background:#1de9b6; color:#06412f; font-size:10.5px; border-radius:6px; padding:2px 7px; vertical-align:middle;}
+  .stage-story{font-size:13px; line-height:1.9; margin-bottom:12px;}
+  .stage-goal{
+    background:#fff8e1; border:1px solid #ffe082; border-radius:9px; padding:10px 12px;
+    font-size:12.5px; line-height:1.8; margin-bottom:12px;
+  }
+  .stage-goal-tag{
+    background:#f9a825; color:#fff; font-size:10.5px; font-weight:700; border-radius:5px;
+    padding:2px 7px; margin-right:8px;
+  }
+  .stage-verdict{border-radius:9px; padding:10px 12px; font-size:12.5px; line-height:1.8; border:1px solid;}
+  .stage-verdict.pass{background:#e8f8f1; border-color:#8fdcbf; color:#0b6b48;}
+  .stage-verdict.fail{background:#fdeeee; border-color:#f3b8b8; color:#9b2c2c;}
+  .stage-verdict.todo{background:#f4f6f8; border-color:#dde3e8; color:#5b6b7a;}
+
+  .stage-record{margin-top:14px;}
+  .stage-record h4{margin:0 0 6px; font-size:12px; color:#888;}
+  .stage-table{border-collapse:collapse; width:100%; font-size:11.5px;}
+  .stage-table th,.stage-table td{border:1px solid #e4e4e4; padding:5px 7px; text-align:left;}
+  .stage-table th{background:#f6f6f6; color:#777; font-size:10.5px; font-weight:700;}
+  .stage-table .fusion-row{background:#f3ecff;}
+
+  .q-nav{display:flex; align-items:center; justify-content:space-between; margin-top:16px;}
+  .q-nav button{background:#fff; border:1px solid #aaa; padding:8px 16px; border-radius:10px; cursor:pointer; font-family:inherit; font-weight:700;}
+  .q-nav button:disabled{color:#ccc; cursor:default;}
+  .q-page{font-size:12px; color:#888;}
+
+  .clear-btn{
+    background:#fff; border:1px solid #aaa; border-radius:30px; padding:9px 16px;
+    font-weight:700; font-size:12.5px; cursor:pointer; font-family:inherit; color:#777;
+  }
+  .clear-btn:hover{background:#fff2f2; border-color:#e08b8b; color:#b3403f;}
