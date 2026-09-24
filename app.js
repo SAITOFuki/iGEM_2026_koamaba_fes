@@ -1117,385 +1117,118 @@
     mdLoop();
   }
 
-  // ---------- 3D protein MD: coarse-grained (Cα-bead) Go-model, Langevin dynamics ----------
-  // A real (if simplified/toy-scale) physics core: harmonic backbone (bond + 1-3 + 1-4
-  // distance restraints), Go-model native contacts (Morse potential — can break under
-  // heat), universal excluded-volume repulsion, a weak nonspecific collapse term, and
-  // overdamped Langevin (friction + thermal noise) integration. NOT a literal amino-acid
-  // structure — a simplified coarse-grained model, clearly labelled as such in the UI.
-  const P3D_N = 32;
-  const P3D_K_BOND = 80, P3D_K13 = 25, P3D_K14 = 8;
-  const P3D_SIGMA_REP = 2.8, P3D_EPS_REP = 0.8;
-  const P3D_EPS_NATIVE = 4.5, P3D_MORSE_A = 1.3;
-  const P3D_F_CAP = 60, P3D_MAX_V = 25;
-  const P3D_GAMMA = 3.0, P3D_DT = 0.006;
-  const P3D_CUTOFF = 7.2;
-
-  function p3dDist(a,b){ const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z; return Math.sqrt(dx*dx+dy*dy+dz*dz); }
-
-  function p3dFoldBarrel(N){
-    const radius=9.5, amplitude=8.0, strandsCount=6;
-    const perStrand=N/strandsCount;
-    const pos=[];
-    for (let i=0;i<N;i++){
-      const angle=(i/N)*Math.PI*2*(strandsCount/2);
-      const phase=(i/perStrand)%2;
-      const tri = phase<1 ? (phase*2-1) : (1-(phase-1)*2);
-      pos.push({x:radius*Math.cos(angle), y:tri*amplitude, z:radius*Math.sin(angle)});
-    }
-    return pos;
-  }
-  function p3dFoldHelixBundle(N){
-    const helices=3, perHelix=Math.floor(N/helices), packR=6.0;
-    const pos=[]; let idx=0;
-    for (let h=0; h<helices; h++){
-      const cx=packR*Math.cos(h/helices*Math.PI*2), cz=packR*Math.sin(h/helices*Math.PI*2);
-      const dir = h%2===0 ? 1 : -1;
-      const count = h===helices-1 ? N-idx : perHelix;
-      for (let k=0;k<count;k++){
-        const t=k/count;
-        const yy=dir*(t-0.5)*(count*1.6);
-        const ha=k*100*Math.PI/180;
-        pos.push({x:cx+2.6*Math.cos(ha), y:yy, z:cz+2.6*Math.sin(ha)});
-        idx++;
-      }
-    }
-    return pos.slice(0,N);
-  }
-  function p3dFoldGlobular(N){
-    const pos=[], R=8.5, golden=Math.PI*(3-Math.sqrt(5));
-    for (let i=0;i<N;i++){
-      const t=i/(N-1), y=1-t*2, r=Math.sqrt(Math.max(0,1-y*y)), theta=golden*i;
-      pos.push({x:R*r*Math.cos(theta), y:R*y, z:R*r*Math.sin(theta)});
-    }
-    return pos;
-  }
-  const P3D_FOLD_BY_KIND = {
-    'gene-visible': p3dFoldBarrel,
-    'gene-repressor': p3dFoldHelixBundle,
-    'gene-activator': p3dFoldHelixBundle,
-    'gene-recomb': p3dFoldGlobular,
-    'gene-kill': p3dFoldGlobular,
-    'gene-degrader': p3dFoldGlobular
+  // ---------- 酵素のドメイン運動と触媒サイクル（enzyme.js に実装）----------
+  // 遺伝子の種類ごとに、粗視化モデルでどんな分子を組み立てるかを決めます。
+  // 融合酵素だけは「触媒ドメイン＋リンカー＋安定化ドメイン」の2ドメイン構成になり、
+  // リンカー上でドメインが振れる様子（ヒンジ運動）が見えます。
+  const ENZ_SHAPE_BY_KIND = {
+    'gene-degrader':  { hasCleft:true,  label:'触媒ドメイン（裂け目に活性部位）' },
+    'gene-visible':   { hasCleft:false, label:'コンパクト球状（GFP様）' },
+    'gene-repressor': { hasCleft:true,  label:'DNA結合型（溝あり）' },
+    'gene-activator': { hasCleft:true,  label:'DNA結合型（溝あり）' },
+    'gene-recomb':    { hasCleft:true,  label:'コンパクト球状' },
+    'gene-kill':      { hasCleft:false, label:'コンパクト球状' }
   };
-  const P3D_FOLD_NAME = {
-    'gene-visible': 'βバレル型（GFP様）', 'gene-repressor': 'ヘリックス束型（DNA結合様）',
-    'gene-activator': 'ヘリックス束型（DNA結合様）', 'gene-recomb': 'コンパクト球状',
-    'gene-kill': 'コンパクト球状', 'gene-degrader': '球状酵素型（触媒ポケット）'
-  };
-
-  function p3dTopology(native){
-    const N=native.length;
-    const bondLen=[]; for (let i=0;i<N-1;i++) bondLen.push(p3dDist(native[i],native[i+1]));
-    const d13=[]; for (let i=0;i<N-2;i++) d13.push(p3dDist(native[i],native[i+2]));
-    const d14=[]; for (let i=0;i<N-3;i++) d14.push(p3dDist(native[i],native[i+3]));
-    const contacts=[];
-    for (let i=0;i<N;i++) for (let j=i+4;j<N;j++){
-      const d=p3dDist(native[i],native[j]);
-      if (d<P3D_CUTOFF) contacts.push({i,j,d0:d});
-    }
-    let cx=0,cy=0,cz=0; native.forEach(p=>{cx+=p.x;cy+=p.y;cz+=p.z;}); cx/=N;cy/=N;cz/=N;
-    let s=0; native.forEach(p=>{s+=(p.x-cx)**2+(p.y-cy)**2+(p.z-cz)**2;});
-    return { bondLen, d13, d14, contacts, N, nativeRg: Math.sqrt(s/N) };
+  // 壊れにくい酵素ほど天然コンタクトを強くする（decayP が小さい = 安定）
+  function enzStability(part){
+    const d = partDecay(part);
+    return Math.max(0.7, Math.min(2.0, 0.7 + 0.18 / d));
   }
 
-  function p3dJitter(native, amount){
-    return native.map(p => ({
-      x: p.x + (Math.random()-0.5)*amount,
-      y: p.y + (Math.random()-0.5)*amount,
-      z: p.z + (Math.random()-0.5)*amount
-    }));
-  }
-  function p3dExtendedChain(N, bondLen){
-    const pos=[{x:0,y:0,z:0}];
-    let d={x:1,y:0.2,z:0};
-    const norm=v=>{const n=Math.hypot(v.x,v.y,v.z)||1e-9; v.x/=n;v.y/=n;v.z/=n; return v;};
-    norm(d);
-    for (let i=1;i<N;i++){
-      d.x+=(Math.random()-0.5)*0.9; d.y+=(Math.random()-0.5)*0.9; d.z+=(Math.random()-0.5)*0.9;
-      norm(d);
-      const b=bondLen[i-1], prev=pos[i-1];
-      pos.push({x:prev.x+d.x*b, y:prev.y+d.y*b, z:prev.z+d.z*b});
-    }
-    return pos;
-  }
-
-  function p3dCap(f){ return Math.max(-P3D_F_CAP, Math.min(P3D_F_CAP, f)); }
-
-  function p3dForces(pos, topo){
-    const N=pos.length;
-    const F=pos.map(()=>({x:0,y:0,z:0}));
-    function spring(i,j,r0,k){
-      const a=pos[i], b=pos[j];
-      const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
-      const r=Math.sqrt(dx*dx+dy*dy+dz*dz)||1e-6;
-      const fmag=p3dCap(k*(r-r0)/r);
-      const fx=fmag*dx, fy=fmag*dy, fz=fmag*dz;
-      F[i].x+=fx; F[i].y+=fy; F[i].z+=fz;
-      F[j].x-=fx; F[j].y-=fy; F[j].z-=fz;
-    }
-    for (let i=0;i<N-1;i++) spring(i,i+1,topo.bondLen[i],P3D_K_BOND);
-    for (let i=0;i<N-2;i++) spring(i,i+2,topo.d13[i],P3D_K13);
-    for (let i=0;i<N-3;i++) spring(i,i+3,topo.d14[i],P3D_K14);
-
-    topo.contacts.forEach(c => {
-      const a=pos[c.i], b=pos[c.j];
-      const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
-      const r=Math.sqrt(dx*dx+dy*dy+dz*dz)||1e-6;
-      const ex=Math.exp(-P3D_MORSE_A*(r-c.d0));
-      const dUdr=2*P3D_EPS_NATIVE*P3D_MORSE_A*ex*(1-ex);
-      const fmag=p3dCap(-dUdr/r);
-      const fx=fmag*dx, fy=fmag*dy, fz=fmag*dz;
-      F[c.i].x+=fx; F[c.i].y+=fy; F[c.i].z+=fz;
-      F[c.j].x-=fx; F[c.j].y-=fy; F[c.j].z-=fz;
-    });
-
-    for (let i=0;i<N;i++){
-      for (let j=i+3;j<N;j++){
-        const a=pos[i], b=pos[j];
-        const dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
-        const r2=dx*dx+dy*dy+dz*dz;
-        if (r2 < P3D_SIGMA_REP*P3D_SIGMA_REP){
-          const r=Math.sqrt(r2)||1e-6;
-          const sr6=Math.pow(P3D_SIGMA_REP/r,6), sr12=sr6*sr6;
-          const fmag=p3dCap(12*P3D_EPS_REP*sr12/r/r);
-          const fx=fmag*dx, fy=fmag*dy, fz=fmag*dz;
-          F[i].x-=fx; F[i].y-=fy; F[i].z-=fz;
-          F[j].x+=fx; F[j].y+=fy; F[j].z+=fz;
-        }
-      }
-    }
-
-    let cx=0,cy=0,cz=0;
-    for (let i=0;i<N;i++){ cx+=pos[i].x; cy+=pos[i].y; cz+=pos[i].z; }
-    cx/=N; cy/=N; cz/=N;
-    let rgNow=0;
-    for (let i=0;i<N;i++) rgNow += (pos[i].x-cx)**2+(pos[i].y-cy)**2+(pos[i].z-cz)**2;
-    rgNow=Math.sqrt(rgNow/N);
-    const excess=Math.max(0, rgNow - topo.nativeRg*1.8);
-    const kConf=0.55*Math.min(1, excess/(topo.nativeRg*0.5));
-    if (kConf>0){
-      for (let i=0;i<N;i++){
-        F[i].x += kConf*(cx-pos[i].x);
-        F[i].y += kConf*(cy-pos[i].y);
-        F[i].z += kConf*(cz-pos[i].z);
-      }
-    }
-    return F;
-  }
-
-  function p3dRg(pos){
-    const N=pos.length; let cx=0,cy=0,cz=0;
-    pos.forEach(p=>{cx+=p.x;cy+=p.y;cz+=p.z;}); cx/=N;cy/=N;cz/=N;
-    let s=0; pos.forEach(p=>{s+=(p.x-cx)**2+(p.y-cy)**2+(p.z-cz)**2;});
-    return Math.sqrt(s/N);
-  }
-  function p3dQ(pos, topo){
-    if (topo.contacts.length===0) return 1;
-    let formed=0;
-    topo.contacts.forEach(c=>{ if (p3dDist(pos[c.i],pos[c.j]) < c.d0*1.2) formed++; });
-    return formed/topo.contacts.length;
-  }
-
-  // ---------- Three.js scene (created once, reused across tab/mode switches) ----------
-  let p3dScene=null, p3dCamera=null, p3dRenderer=null, p3dBeadMeshes=[], p3dBondMeshes=[];
-  let p3dOrbit={theta:0.9, phi:1.1, dist:34, target:{x:0,y:0,z:0}};
-  let p3dDragging=false, p3dLastPointer=null;
-  let p3dGeneKind=null, p3dNative=null, p3dTopo=null, p3dPos=null, p3dVel=null;
-  let p3dAnimHandle=null, p3dRunning=false, p3dKT=15;
-
-  function ensureThreeScene(mountEl){
-    if (typeof THREE === 'undefined') return false;
-    if (!p3dRenderer){
-      p3dScene = new THREE.Scene();
-      p3dCamera = new THREE.PerspectiveCamera(45, 560/380, 0.1, 500);
-      p3dRenderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
-      p3dRenderer.setSize(560, 380, false);
-      p3dScene.add(new THREE.AmbientLight(0xffffff, 0.55));
-      const dl = new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(20,30,25); p3dScene.add(dl);
-      const dl2 = new THREE.DirectionalLight(0x88bbff, 0.35); dl2.position.set(-20,-10,-15); p3dScene.add(dl2);
-      p3dScene.background = new THREE.Color(0x0a1512);
-
-      p3dRenderer.domElement.addEventListener('pointerdown', e => {
-        p3dDragging = true; p3dLastPointer = { x:e.clientX, y:e.clientY };
-      });
-      window.addEventListener('pointermove', e => {
-        if (!p3dDragging) return;
-        const dx = e.clientX - p3dLastPointer.x, dy = e.clientY - p3dLastPointer.y;
-        p3dLastPointer = { x:e.clientX, y:e.clientY };
-        p3dOrbit.theta -= dx*0.008;
-        p3dOrbit.phi = Math.max(0.15, Math.min(Math.PI-0.15, p3dOrbit.phi - dy*0.008));
-      });
-      window.addEventListener('pointerup', () => { p3dDragging = false; });
-      p3dRenderer.domElement.addEventListener('wheel', e => {
-        e.preventDefault();
-        p3dOrbit.dist = Math.max(14, Math.min(90, p3dOrbit.dist + e.deltaY*0.03));
-      }, { passive:false });
-    }
-    if (mountEl && p3dRenderer.domElement.parentElement !== mountEl){
-      mountEl.appendChild(p3dRenderer.domElement);
-    }
-    return true;
-  }
-
-  function rebuildP3dMeshes(N){
-    p3dBeadMeshes.forEach(m => p3dScene.remove(m));
-    p3dBondMeshes.forEach(m => p3dScene.remove(m));
-    p3dBeadMeshes = []; p3dBondMeshes = [];
-    const sphGeo = new THREE.SphereGeometry(0.62, 14, 10);
-    for (let i=0;i<N;i++){
-      const hue = (i/(N-1)) * 0.66; // spectrum: blue(N-term) -> red(C-term), classic convention
-      const color = new THREE.Color().setHSL(0.66 - hue, 0.75, 0.55);
-      const mat = new THREE.MeshStandardMaterial({ color, roughness:0.45, metalness:0.05 });
-      const mesh = new THREE.Mesh(sphGeo, mat);
-      p3dScene.add(mesh);
-      p3dBeadMeshes.push(mesh);
-    }
-    const cylGeo = new THREE.CylinderGeometry(0.22, 0.22, 1, 8, 1);
-    for (let i=0;i<N-1;i++){
-      const mat = new THREE.MeshStandardMaterial({ color:0xbfcfd8, roughness:0.6 });
-      const mesh = new THREE.Mesh(cylGeo, mat);
-      p3dScene.add(mesh);
-      p3dBondMeshes.push(mesh);
-    }
-  }
-
-  function initProtein3D(geneKind){
-    p3dGeneKind = geneKind;
-    const foldFn = P3D_FOLD_BY_KIND[geneKind] || p3dFoldGlobular;
-    p3dNative = foldFn(P3D_N);
-    p3dTopo = p3dTopology(p3dNative);
-    p3dPos = p3dJitter(p3dNative, 2.0);
-    p3dVel = p3dPos.map(()=>({x:0,y:0,z:0}));
-    if (p3dScene) rebuildP3dMeshes(P3D_N);
-  }
-
-  function unfoldProtein3D(){
-    if (!p3dTopo) return;
-    p3dPos = p3dExtendedChain(P3D_N, p3dTopo.bondLen);
-    p3dVel = p3dPos.map(()=>({x:0,y:0,z:0}));
-  }
-
-  function stepProtein3D(substeps){
-    for (let s=0;s<substeps;s++){
-      const F = p3dForces(p3dPos, p3dTopo);
-      for (let i=0;i<P3D_N;i++){
-        const noiseScale = Math.sqrt(2*P3D_GAMMA*p3dKT*P3D_DT);
-        ['x','y','z'].forEach(ax => {
-          p3dVel[i][ax] += (F[i][ax] - P3D_GAMMA*p3dVel[i][ax])*P3D_DT + noiseScale*gaussianRand();
-          p3dVel[i][ax] = Math.max(-P3D_MAX_V, Math.min(P3D_MAX_V, p3dVel[i][ax]));
-          p3dPos[i][ax] += p3dVel[i][ax]*P3D_DT;
-        });
-      }
-    }
-  }
-
-  function renderProtein3DFrame(){
-    if (!p3dRenderer || !p3dPos) return;
-    for (let i=0;i<P3D_N;i++){
-      p3dBeadMeshes[i].position.set(p3dPos[i].x, p3dPos[i].y, p3dPos[i].z);
-    }
-    for (let i=0;i<P3D_N-1;i++){
-      const a=p3dPos[i], b=p3dPos[i+1];
-      const mid = new THREE.Vector3((a.x+b.x)/2, (a.y+b.y)/2, (a.z+b.z)/2);
-      const dir = new THREE.Vector3(b.x-a.x, b.y-a.y, b.z-a.z);
-      const len = dir.length();
-      const mesh = p3dBondMeshes[i];
-      mesh.position.copy(mid);
-      mesh.scale.set(1, len, 1);
-      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
-    }
-
-    const cx = p3dOrbit.dist*Math.sin(p3dOrbit.phi)*Math.cos(p3dOrbit.theta);
-    const cy = p3dOrbit.dist*Math.cos(p3dOrbit.phi);
-    const cz = p3dOrbit.dist*Math.sin(p3dOrbit.phi)*Math.sin(p3dOrbit.theta);
-    p3dCamera.position.set(cx,cy,cz);
-    p3dCamera.lookAt(0,0,0);
-    p3dRenderer.render(p3dScene, p3dCamera);
-
-    const rg = p3dRg(p3dPos), q = p3dQ(p3dPos, p3dTopo);
-    const rgEl = document.getElementById('p3dRg'), qEl = document.getElementById('p3dQ');
-    if (rgEl) rgEl.textContent = 'Rg = ' + rg.toFixed(2) + '（天然状態 ' + p3dTopo.nativeRg.toFixed(2) + '）';
-    if (qEl) qEl.textContent = 'Q（天然コンタクト率） = ' + (q*100).toFixed(0) + '%';
-  }
-
-  function p3dLoop(){
-    if (!p3dRunning) return;
-    stepProtein3D(4);
-    renderProtein3DFrame();
-    p3dAnimHandle = requestAnimationFrame(p3dLoop);
-  }
-  function stopProtein3D(){
-    p3dRunning = false;
-    if (p3dAnimHandle) cancelAnimationFrame(p3dAnimHandle);
-    p3dAnimHandle = null;
-  }
-  function startProtein3D(){
-    if (p3dRunning) return;
-    p3dRunning = true;
-    p3dLoop();
-  }
+  let enzSelectedId = null, enzKT = 1.2;
 
   function renderMDProtein3D(){
     const host = document.getElementById('mdModeHost');
-    const geneKinds = [...new Set(lastResults.flatMap(r => r.genes.map(g => g.part.kind)))];
-    if (geneKinds.length === 0){
+    const items = [];
+    lastResults.forEach(r => r.genes.forEach(g => {
+      if (!items.some(x => x.part.id === g.part.id)) items.push({ part: g.part });
+    }));
+    if (!items.length){
       host.innerHTML = '<div class="empty-note">回路に遺伝子（タンパク質コーディング領域）がありません。</div>';
       return;
     }
-    if (!geneKinds.includes(p3dGeneKind)) p3dGeneKind = geneKinds[0];
-    const geneLabel = k => (lastResults.flatMap(r=>r.genes).find(g=>g.part.kind===k) || {}).part?.label || k;
+    if (!items.some(x => x.part.id === enzSelectedId)) enzSelectedId = items[0].part.id;
+    const sel = items.find(x => x.part.id === enzSelectedId).part;
+    const shape = ENZ_SHAPE_BY_KIND[sel.kind] || { hasCleft:false, label:'コンパクト球状' };
 
     host.innerHTML =
       '<div class="md-wrap">' +
-        '<div class="md-desc">各遺伝子の産物を、アミノ酸1残基=1粒子(Cα)に簡略化した粗視化モデルとして3D表示します。バネ(結合・局所剛性)＋天然コンタクト(Go模型・モース型ポテンシャル)＋排除体積＋ランジュバン熱浴、という実在のMD手法の縮小版です。<b>実際のアミノ酸配列ではなく、簡略化した仮想の構造</b>です。ドラッグで回転、ホイールでズームできます。</div>' +
-        '<div class="p3d-protein-select" id="p3dSelect"></div>' +
-        '<div class="p3d-shell">' +
-          '<div class="p3d-mount" id="p3dMount"></div>' +
-          '<div class="p3d-hint">🖱️ ドラッグで回転 / ホイールでズーム</div>' +
+        '<div class="md-desc">アミノ酸1残基=1粒子(Cα)に簡略化した粗視化モデルで、酵素の<b>可動部分</b>を計算します。' +
+          '骨格のバネ＋天然コンタクト(Go模型・モース型)＋排除体積＋ランジュバン熱浴という、実在のMD手法の縮小版です。' +
+          'リンカー部分には角度拘束も天然コンタクトも入れていないため、2つのドメインが自由に振れます。' +
+          '<b>実際のアミノ酸配列ではなく、簡略化した仮想の構造</b>です。</div>' +
+        '<div class="p3d-protein-select" id="enzSelect"></div>' +
+        '<div class="p3d-shell"><div class="p3d-mount" id="enzMount"></div>' +
+          '<div class="p3d-hint">🖱️ ドラッグで回転 / ホイールでズーム</div></div>' +
+        '<div class="enz-legend">' +
+          '<span><i style="background:#f97316"></i>触媒ドメイン</span>' +
+          '<span><i style="background:#fde047"></i>活性部位</span>' +
+          '<span><i style="background:#94a3b8"></i>リンカー（柔軟）</span>' +
+          '<span><i style="background:#14b8a6"></i>安定化ドメイン</span>' +
+          '<span><i style="background:#27272a"></i>基質（重油）</span>' +
+          '<span><i style="background:#a1a1aa"></i>生成物</span>' +
         '</div>' +
         '<div class="p3d-controls">' +
-          '<div class="p3d-row"><label>🌡️ 温度</label><input type="range" id="p3dTemp" min="1" max="160" value="' + p3dKT + '"><span id="p3dTempVal">' + p3dKT + '</span></div>' +
-          '<button id="p3dResetBtn">🔄 折りたたみ直す</button>' +
-          '<button id="p3dUnfoldBtn">🌀 変性させる（伸ばす）</button>' +
+          '<div class="p3d-row"><label>🌡️ 温度 kT</label>' +
+            '<input type="range" id="enzTemp" min="2" max="80" value="' + Math.round(enzKT*10) + '">' +
+            '<span id="enzTempVal">' + enzKT.toFixed(1) + '</span></div>' +
+          '<button id="enzReset">🔄 やり直す</button>' +
         '</div>' +
-        '<div class="p3d-readouts">' +
-          '<span class="chip" id="p3dRg">Rg = —</span>' +
-          '<span class="chip" id="p3dQ">Q = —</span>' +
-        '</div>' +
-        '<div class="p3d-note">低温では天然構造付近で揺らぎ、温度を上げるとGo模型コンタクトが熱で切れて構造が崩れます（Rg上昇・Q低下）。Q・Rgは分子動力学で実際に使われる標準的な構造指標です。</div>' +
+        '<div class="p3d-readouts" id="enzStats"></div>' +
+        '<div class="p3d-note" id="enzNote"></div>' +
       '</div>';
 
-    const selectHost = document.getElementById('p3dSelect');
-    geneKinds.forEach(k => {
-      const btn = document.createElement('button');
-      btn.textContent = geneLabel(k) + '（' + (P3D_FOLD_NAME[k] || 'コンパクト球状') + '）';
-      btn.className = k === p3dGeneKind ? 'active' : '';
-      btn.addEventListener('click', () => {
-        p3dGeneKind = k;
-        initProtein3D(p3dGeneKind);
-        renderMDProtein3D();
-      });
-      selectHost.appendChild(btn);
+    const selHost = document.getElementById('enzSelect');
+    items.forEach(it => {
+      const b = document.createElement('button');
+      b.textContent = it.part.label + (it.part.isFusion ? '（2ドメイン）' : '');
+      b.className = it.part.id === enzSelectedId ? 'active' : '';
+      b.addEventListener('click', () => { enzSelectedId = it.part.id; renderMDProtein3D(); });
+      selHost.appendChild(b);
     });
 
-    const mount = document.getElementById('p3dMount');
-    const ok = ensureThreeScene(mount);
+    const mount = document.getElementById('enzMount');
+    const ok = window.EnzymeMD && window.EnzymeMD.View && window.EnzymeMD.View.mount(mount, {
+      twoDomain: !!sel.isFusion,
+      hasCleft: shape.hasCleft,
+      stability: enzStability(sel),
+      seed: hashSeed(sel.id),
+      kT: enzKT,
+      onStats: updateEnzStats
+    });
     if (!ok){
-      host.innerHTML += '<div class="empty-note">⚠️ 3D描画ライブラリ(Three.js)を読み込めませんでした。インターネット接続を確認してください。</div>';
+      host.innerHTML += '<div class="empty-note">⚠️ 3D描画ライブラリ(Three.js)を読み込めませんでした。</div>';
       return;
     }
-    if (!p3dPos) initProtein3D(p3dGeneKind);
 
-    document.getElementById('p3dTemp').addEventListener('input', e => {
-      p3dKT = Number(e.target.value);
-      document.getElementById('p3dTempVal').textContent = p3dKT;
+    const temp = document.getElementById('enzTemp');
+    temp.addEventListener('input', e => {
+      enzKT = Number(e.target.value) / 10;
+      document.getElementById('enzTempVal').textContent = enzKT.toFixed(1);
+      window.EnzymeMD.View.setKT(enzKT);
     });
-    document.getElementById('p3dResetBtn').addEventListener('click', () => { initProtein3D(p3dGeneKind); });
-    document.getElementById('p3dUnfoldBtn').addEventListener('click', () => { unfoldProtein3D(); });
+    document.getElementById('enzReset').addEventListener('click', () => window.EnzymeMD.View.reset());
+    document.getElementById('enzNote').innerHTML =
+      '構造: ' + shape.label + ' ／ 安定性係数 ' + enzStability(sel).toFixed(2) +
+      '（壊れにくい酵素ほど天然コンタクトが強く、高温でも構造を保ちます）。' +
+      '温度を上げると天然コンタクトが熱で切れ、Q が下がって触媒回転数も落ちます。';
+  }
 
-    startProtein3D();
-    renderProtein3DFrame();
+  function hashSeed(str){
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+
+  function updateEnzStats(s){
+    const el = document.getElementById('enzStats');
+    if (!el) return;
+    el.innerHTML =
+      '<span class="chip">活性部位の開き ' + s.cleft.toFixed(1) + '</span>' +
+      (s.hinge != null ? '<span class="chip">ドメイン間角度 ' + s.hinge.toFixed(0) + '°</span>' : '') +
+      '<span class="chip">Q（天然コンタクト率） ' + (s.Q*100).toFixed(0) + '%</span>' +
+      '<span class="chip">回転数 ' + s.turnovers + '</span>' +
+      '<span class="chip">回転速度 ' + s.rate.toFixed(1) + ' /分</span>';
   }
 
   let mdMode = 'cell';
@@ -1508,10 +1241,10 @@
     tabContent.innerHTML =
       '<div class="md-mode-toggle">' +
         '<button class="md-mode-btn ' + (mdMode === 'cell' ? 'active' : '') + '" id="mdModeCellBtn">🧫 細胞内シミュレーション（2D）</button>' +
-        '<button class="md-mode-btn ' + (mdMode === 'protein3d' ? 'active' : '') + '" id="mdModeP3dBtn">🧬 タンパク質構造MD（3D）</button>' +
+        '<button class="md-mode-btn ' + (mdMode === 'protein3d' ? 'active' : '') + '" id="mdModeP3dBtn">🧬 酵素の可動部分と触媒（3D）</button>' +
       '</div>' +
       '<div id="mdModeHost"></div>';
-    document.getElementById('mdModeCellBtn').addEventListener('click', () => { if (mdMode !== 'cell') { stopProtein3D(); mdMode = 'cell'; renderMD(); } });
+    document.getElementById('mdModeCellBtn').addEventListener('click', () => { if (mdMode !== 'cell') { if (window.EnzymeMD && window.EnzymeMD.View) window.EnzymeMD.View.unmount(); mdMode = 'cell'; renderMD(); } });
     document.getElementById('mdModeP3dBtn').addEventListener('click', () => { if (mdMode !== 'protein3d') { stopMD(); mdMode = 'protein3d'; renderMD(); } });
 
     if (mdMode === 'cell') renderMDCell();
@@ -1561,7 +1294,7 @@
 
   tabsBar.querySelectorAll('.tab-item').forEach(el => {
     el.addEventListener('click', () => {
-      if (activeTab === 'md' && el.dataset.tab !== 'md') { stopMD(); stopProtein3D(); }
+      if (activeTab === 'md' && el.dataset.tab !== 'md') { stopMD(); if (window.EnzymeMD && window.EnzymeMD.View) window.EnzymeMD.View.unmount(); }
       tabsBar.querySelectorAll('.tab-item').forEach(x => x.classList.remove('active'));
       el.classList.add('active');
       activeTab = el.dataset.tab;
