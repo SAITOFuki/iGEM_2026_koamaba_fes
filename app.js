@@ -29,16 +29,16 @@
     { id:'promConst1',      shape:'promoter',  cat:'promoter', kind:'prom-const',     label:'常に発現',              short:'常時発現',   desc:'常に一定の割合で下流を転写します。' },
     { id:'promRepressor',   shape:'promoter',  cat:'promoter', kind:'prom-repressor', label:'リプレッサー抑制',       short:'抑制プロモーター', desc:'活性化されたリプレッサーが結合すると下流の転写が抑制されます。' },
     { id:'promActivator',   shape:'promoter',  cat:'promoter', kind:'prom-activator', label:'アクチベーター促進',     short:'促進プロモーター', desc:'活性化されたアクチベーターが結合すると下流の転写が促進されます。' },
-    { id:'promSignalOff',   shape:'promoter',  cat:'promoter', kind:'prom-signal-off',label:'シグナル分子で抑制',     short:'シグナル抑制', desc:'シグナル分子（Labのスライダーで調整）があると下流の転写が<b>止まります</b>。シグナルが無いと転写されます。キルスイッチと組み合わせる封じ込め回路の定番です。' },
-    { id:'promSignalOn',    shape:'promoter',  cat:'promoter', kind:'prom-signal-on', label:'シグナル分子で発現',     short:'シグナル発現', desc:'シグナル分子（Labのスライダーで調整）があるときだけ下流が転写されます。' },
+    { id:'promSignalOff',   shape:'promoter',  cat:'promoter', kind:'prom-signal-off',label:'シグナル分子で抑制',     short:'シグナル抑制', desc:'シグナル分子（Labで調整）の存在下では下流の転写が抑制され、非存在下では転写されます。キルスイッチと組み合わせるバイオコンテインメント回路に用います。' },
+    { id:'promSignalOn',    shape:'promoter',  cat:'promoter', kind:'prom-signal-on', label:'シグナル分子で発現',     short:'シグナル発現', desc:'シグナル分子（Labで調整）が存在するときのみ下流が転写されます。' },
     { id:'visiFluorescence',shape:'visible',   cat:'gene',     kind:'gene-visible',   label:'蛍光タンパク質遺伝子',   short:'GFP',        desc:'蛍光を発するタンパク質です。' },
-    { id:'DegradingEnzyme', shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'重油分解酵素遺伝子（標準）', short:'分解酵素', desc:'重油を分解する酵素です。分解速度・安定性ともに標準的なバランス型。',
+    { id:'DegradingEnzyme', shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'重油分解酵素遺伝子（標準）', short:'分解酵素', desc:'重油の主成分である長鎖アルカンを分解する酵素です。触媒速度・安定性ともに標準的なバリアント。',
       kcat:4.0, decayP:0.30 },
-    { id:'enzFast',         shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'高速分解酵素遺伝子',     short:'高速酵素',   desc:'1分子あたりの分解速度がとても速い酵素です。ただしタンパク質としては<b>壊れやすく</b>、細胞内に溜まりません。',
+    { id:'enzFast',         shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'高速分解酵素遺伝子',     short:'高速酵素',   desc:'触媒速度（kcat）が高いバリアントです。ただしタンパク質としての安定性が低く、細胞内にほとんど蓄積しません。',
       kcat:9.0, decayP:1.00 },
-    { id:'enzStable',       shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'安定分解酵素遺伝子',     short:'安定酵素',   desc:'分解速度は遅いものの、<b>とても壊れにくい</b>酵素です。時間が経つほど細胞内に大量に蓄積します。',
+    { id:'enzStable',       shape:'visible',   cat:'gene',     kind:'gene-degrader',  label:'安定分解酵素遺伝子',     short:'安定酵素',   desc:'触媒速度は低いものの、細胞内プロテアーゼによる分解を受けにくいバリアントです。時間とともに高濃度まで蓄積します。',
       kcat:1.5, decayP:0.10 },
-    { id:'seqLinker',       shape:'meta',      cat:'seq',      kind:'seq-linker',     label:'リンカー配列',           short:'リンカー',    desc:'2つの酵素遺伝子の<b>間</b>に挟むと、両者が1本の「融合タンパク質」としてつながって翻訳されます。速い酵素の触媒ドメインと、壊れにくい酵素の安定ドメインを組み合わせられます。' },
+    { id:'seqLinker',       shape:'meta',      cat:'seq',      kind:'seq-linker',     label:'リンカー配列',           short:'リンカー',    desc:'2つの酵素遺伝子の<b>間</b>に挿入すると、両者がin-frameで連結された1本の融合タンパク質として翻訳されます。触媒ドメインと安定化ドメインを組み合わせる際に用います。' },
     { id:'ctrlRepressor',   shape:'control',   cat:'gene',     kind:'gene-repressor', label:'リプレッサー遺伝子',     short:'抑制遺伝子',  desc:'プロモーターの転写を抑制します。' },
     { id:'ctrlActivator',   shape:'control',   cat:'gene',     kind:'gene-activator', label:'アクチベーター遺伝子',   short:'促進遺伝子',  desc:'プロモーターの転写を促進します。' },
     { id:'term1',           shape:'terminator',cat:'terminator',kind:'terminator',    label:'ターミネーター',         short:'ターミネーター', desc:'転写を終了します。これ以降のブロックは転写されません。' },
@@ -167,9 +167,11 @@
   const blocks = new Map();
   let seq = 0, zTop = 1, dragState = null;
 
+  // Positioned with translate3d rather than left/top: moving an element that carries a
+  // drop-shadow filter via left/top leaves repaint trails, because the invalidated rect
+  // does not include the filter's overflow. A composited transform avoids that entirely.
   function render(b){
-    b.el.style.left = b.x + 'px';
-    b.el.style.top = (b.connY + b.barOffset - b.h) + 'px';
+    b.el.style.transform = 'translate3d(' + b.x + 'px,' + (b.connY + b.barOffset - b.h) + 'px,0)';
   }
 
   function updateHint(){ programHint.style.display = blocks.size ? 'none' : 'flex'; }
@@ -614,17 +616,17 @@
       previewStatus.textContent = '💀 キルスイッチが作動し、Genomyは死滅しました。';
     } else if (hasDegradingEnzyme) {
       previewStatus.className = 'preview-status ok';
-      previewStatus.textContent = '✅ 重油分解酵素を生産中です（分解率 ' + (lastOil ? lastOil.removedPct.toFixed(1) : '0') + '%）。';
+      previewStatus.textContent = '✅ 重油分解酵素を発現中（分解率 ' + (lastOil ? lastOil.removedPct.toFixed(1) : '0') + '%）。';
     } else if (totalGFP > 0.1) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ GFPが発現し、Genomyが発光しています（発現量 ≈ ' + totalGFP.toFixed(2) + '）。';
     } else if (items.some(it => it.part.kind === 'gene-kill')) {
       // Kill gene present but below the lethal threshold — the containment circuit is holding.
       previewStatus.className = 'preview-status ok';
-      previewStatus.textContent = '🛡️ キルスイッチは抑えられていて、Genomyは生存しています。';
+      previewStatus.textContent = '🛡️ キルスイッチの転写が抑制されており、Genomyは生存しています。';
     } else if (items.length) {
       previewStatus.className = 'preview-status warn';
-      previewStatus.textContent = '遺伝子は組み込まれていますが、いまの条件ではほとんど発現していません。';
+      previewStatus.textContent = '遺伝子は組み込まれていますが、現在の条件ではほとんど発現していません。';
     } else {
       previewStatus.className = 'preview-status warn';
       previewStatus.textContent = '回路に遺伝子（タンパク質コーディング領域）がありません。';
@@ -674,71 +676,72 @@
 
   const STAGES = [
     {
-      title: 'ステージ1: 大腸菌に重油分解酵素を作らせよう',
-      story: '20XX/XX/XX、重油を積んだ船が沈没しました。重油は環境中で分解されにくく、海洋生物や人間の健康に悪影響を及ぼす可能性があります。\n' +
-             'そこで、Genochemyを使って大腸菌に重油分解酵素を作らせることにしました。\nまずは、重油分解酵素を作るための遺伝子回路を設計してみましょう。',
-      goal: '「常に発現」→「重油分解酵素遺伝子（標準）」→「ターミネーター」をつなげて実行し、海水の重油を <b>25%以上</b> 分解する。',
+      title: 'ステージ1: 重油分解酵素を発現させる',
+      story: 'タンカーの座礁により、沿岸海域へ大量の重油が流出しました。重油の主成分である長鎖アルカンは自然界での分解が遅く、生態系への影響は数年から数十年に及びます。\n' +
+             '対策として、アルカン分解酵素を発現する大腸菌を設計します。まずは遺伝子発現の最小単位である転写ユニット——プロモーター、タンパク質コーディング領域、ターミネーター——を構成してください。',
+      goal: '「常に発現」→「重油分解酵素遺伝子（標準）」→「ターミネーター」を連結して実行し、海水中の重油を <b>25%以上</b> 分解する。',
       judge(ctx){
-        if (!ctx.results.length) return { state:'todo', msg:'まだ回路がありません。トレイからブロックをつなげて「実行」を押しましょう。' };
-        if (!ctx.oil.hasEnzyme) return { state:'fail', msg:'分解酵素が作られていません。プロモーターとターミネーターの<b>間</b>に「重油分解酵素遺伝子」を入れましょう。' };
-        if (ctx.noTerminator) return { state:'fail', msg:'重油は' + ctx.oil.removedPct.toFixed(0) + '%しか分解できませんでした。ターミネーターが無いと転写が最後まで安定しません（転写効率が30%に落ちています）。回路の最後に「ターミネーター」をつなげましょう。' };
-        if (ctx.oil.removedPct >= 25) return { state:'pass', msg:'重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました！大腸菌が分解酵素を作れています。' };
-        return { state:'fail', msg:'重油の分解は ' + ctx.oil.removedPct.toFixed(1) + '% 止まりでした。酵素の発現量が足りないようです。' };
+        if (!ctx.results.length) return { state:'todo', msg:'回路が構成されていません。トレイのブロックを連結して「実行」してください。' };
+        if (!ctx.oil.hasEnzyme) return { state:'fail', msg:'分解酵素が発現していません。プロモーターとターミネーターの<b>間</b>にコーディング領域を配置してください。' };
+        if (ctx.noTerminator) return { state:'fail', msg:'分解率は ' + ctx.oil.removedPct.toFixed(1) + '% にとどまりました。ターミネーターが無いと転写が正常に終結せず、転写効率が30%まで低下します。回路末端にターミネーターを連結してください。' };
+        if (ctx.oil.removedPct >= 25) return { state:'pass', msg:'重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました。転写ユニットが正しく機能しています。' };
+        return { state:'fail', msg:'分解率は ' + ctx.oil.removedPct.toFixed(1) + '% でした。酵素の発現量が不足しています。' };
       }
     },
     {
-      title: 'ステージ2: 様々な分解酵素を比べてみよう',
-      story: '重油分解酵素には様々な種類があり、<b>安定性</b>と<b>分解速度</b>が異なります。\n' +
-             '「高速分解酵素」は1分子あたりの分解が速い代わりにすぐ壊れてしまい、「安定分解酵素」は遅い代わりに細胞内にどんどん溜まっていきます。\n' +
-             '2種類を別々に試して、グラフの形の違いを見比べてみましょう。',
-      goal: '「高速分解酵素遺伝子」と「安定分解酵素遺伝子」を<b>それぞれ1回ずつ</b>回路に組んで実行し、結果を比較する。',
+      title: 'ステージ2: 触媒速度と安定性のトレードオフ',
+      story: '分解酵素には複数のバリアントが存在し、触媒速度（kcat）とタンパク質の安定性が異なります。\n' +
+             '「高速分解酵素」は kcat が高い一方で半減期が短く、細胞内にほとんど蓄積しません。「安定分解酵素」は kcat が低いものの、分解を受けにくいため時間とともに高濃度まで蓄積します。\n' +
+             '両者を個別に発現させ、発現量曲線と分解率の時間変化を比較してください。',
+      goal: '「高速分解酵素遺伝子」と「安定分解酵素遺伝子」を<b>それぞれ単独で</b>発現させ、両者の挙動を比較する。',
       judge(ctx){
         const f = stageState.enzymeRuns['enzFast'], s = stageState.enzymeRuns['enzStable'];
         if (f && s) {
           const winner = f.removedPct >= s.removedPct ? f : s;
-          return { state:'pass', msg:'2種類とも試せました！このシミュレーション時間では <b>' + winner.label + '</b> の方が多く分解できています（' +
+          return { state:'pass', msg:'両者のデータが揃いました。このシミュレーション時間では <b>' + winner.label + '</b> が上回っています（' +
             f.label + ': ' + f.removedPct.toFixed(1) + '% / ' + s.label + ': ' + s.removedPct.toFixed(1) + '%）。' +
-            '高速酵素は立ち上がりが速く、安定酵素は後半で伸びます。下の記録で見比べてみましょう。' };
+            '高速酵素は立ち上がりが速く早期に優位ですが、安定酵素は蓄積により後半で逆転します。下の記録を参照してください。' };
         }
         const missing = [];
         if (!f) missing.push('高速分解酵素');
         if (!s) missing.push('安定分解酵素');
-        return { state:'todo', msg:'あと <b>' + missing.join('・') + '</b> を試してみましょう（1回ずつ別々に組んで実行します）。' };
+        return { state:'todo', msg:'未取得のデータ: <b>' + missing.join('・') + '</b>（それぞれ単独で構成し実行してください）。' };
       }
     },
     {
-      title: 'ステージ3: 分解酵素のいいところを組み合わせよう',
-      story: '高速酵素の「速さ」と、安定酵素の「壊れにくさ」。どちらも捨てがたいなら、<b>くっつけてしまえばいい</b>のです。\n' +
-             '実際の合成生物学でも、2つのタンパク質の遺伝子を短い「リンカー配列」でつないで1本の融合タンパク質として作らせる手法がよく使われます。\n' +
-             'トレイの「リンカー配列」を2つの酵素遺伝子の<b>間</b>に挟んでみましょう。',
-      goal: '「高速分解酵素遺伝子」→「リンカー配列」→「安定分解酵素遺伝子」の順につないで融合酵素を作り、重油を <b>85%以上</b> 分解する。',
+      title: 'ステージ3: ドメイン融合による性能の両立',
+      story: '触媒速度と安定性は、それぞれ異なるドメインに由来する性質です。両者を1本のポリペプチドとして連結できれば、速度と安定性を同時に得られる可能性があります。\n' +
+             '合成生物学では、2つのコーディング領域を短いリンカー配列を介してin-frameで連結し、融合タンパク質として発現させる手法が広く用いられます。\n' +
+             'トレイの「リンカー配列」を2つの酵素遺伝子の<b>間</b>に挿入してください。',
+      goal: '「高速分解酵素遺伝子」→「リンカー配列」→「安定分解酵素遺伝子」の順に連結して融合酵素を発現させ、重油を <b>85%以上</b> 分解する。',
       judge(ctx){
-        if (!ctx.results.length) return { state:'todo', msg:'まだ回路がありません。' };
-        if (!ctx.hasFusion) return { state:'todo', msg:'まだ融合酵素ができていません。2つの酵素遺伝子の<b>間</b>に「リンカー配列」を挟むと融合します（酵素・リンカー・酵素の順）。' };
-        if (ctx.oil.removedPct >= 85) return { state:'pass', msg:'融合酵素が完成し、重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました！速さと安定性を両立できています。' };
-        return { state:'fail', msg:'融合酵素はできていますが、分解は ' + ctx.oil.removedPct.toFixed(1) + '% でした。速い酵素と安定な酵素の組み合わせになっているか確認しましょう。' };
+        if (!ctx.results.length) return { state:'todo', msg:'回路が構成されていません。' };
+        if (!ctx.hasFusion) return { state:'todo', msg:'融合タンパク質が生成されていません。2つの酵素遺伝子の<b>間</b>にリンカー配列を挿入してください（酵素・リンカー・酵素の順）。' };
+        if (ctx.oil.removedPct >= 85) return { state:'pass', msg:'融合酵素が発現し、重油を ' + ctx.oil.removedPct.toFixed(1) + '% 分解しました。触媒速度と安定性の両立に成功しています。' };
+        return { state:'fail', msg:'融合タンパク質は生成されていますが、分解率は ' + ctx.oil.removedPct.toFixed(1) + '% でした。高速バリアントと安定バリアントの組み合わせになっているか確認してください。' };
       }
     },
     {
-      title: 'ステージ4: 細菌が重油貯蔵タンクに入ってしまった！',
-      story: '悪の組織が細菌を盗み出し、重油貯蔵タンクに入れようとしているという噂が流れてきました。\nこのままではタンク内の重油が使えなくなってしまいます。\n' +
-             'そこで、<b>決められたシグナル分子がある場所でしか生きられない</b>ようにします。海の現場にはシグナル分子を撒いておき、盗まれた先には無い——という封じ込め（バイオコンテインメント）の考え方です。',
-      goal: '「シグナル分子で抑制」→「キルスイッチ遺伝子」→「ターミネーター」をつなぎ、Labのシグナル分子スライダーを動かして<b>シグナルあり=生存／シグナルなし=死滅</b>の両方を確認する。',
+      title: 'ステージ4: バイオコンテインメント回路の設計',
+      story: '設計した菌株が処理海域外へ流出するリスクが指摘されました。重油貯蔵タンクなど意図しない環境で増殖すれば、保管中の重油まで分解されてしまいます。\n' +
+             '遺伝子組換え生物の環境放出では、特定の化学シグナルの存在下でのみ生存できるよう設計する「キルスイッチ」方式が用いられます。シグナル分子は処理対象の海域にのみ散布します。\n' +
+             'シグナル分子の存在下でキルスイッチの転写が抑制され、非存在下では発現して細胞死を誘導する回路を設計してください。',
+      goal: '「シグナル分子で抑制」→「キルスイッチ遺伝子」→「ターミネーター」を連結し、Labのシグナル分子濃度を変えて<b>シグナルあり=生存／シグナルなし=死滅</b>の両方を確認する。',
       judge(ctx){
         const on = stageState.killWithSignal, off = stageState.killNoSignal;
         if (on && off && !on.dead && off.dead) {
-          return { state:'pass', msg:'封じ込め回路が完成しました！シグナル分子があるときだけ生存し、無い場所では自滅します。' };
+          return { state:'pass', msg:'バイオコンテインメント回路が成立しました。シグナル分子の存在下でのみ生存し、非存在下では自律的に死滅します。' };
         }
         const todo = [];
-        if (!on || on.dead) todo.push('シグナル分子を高く（60以上）して<b>生存</b>すること');
-        if (!off || !off.dead) todo.push('シグナル分子を0にして<b>死滅</b>すること');
-        return { state: (on || off) ? 'fail' : 'todo', msg:'あと確認が必要です: ' + todo.join(' / ') + '。Labを開いてスライダーを動かすと自動で再実行されます。' };
+        if (!on || on.dead) todo.push('シグナル分子濃度60以上で<b>生存</b>すること');
+        if (!off || !off.dead) todo.push('シグナル分子濃度0で<b>死滅</b>すること');
+        return { state: (on || off) ? 'fail' : 'todo', msg:'未確認の条件: ' + todo.join(' / ') + '。Labのスライダーを動かすと自動で再実行されます。' };
       }
     },
     {
-      title: 'おまけ: Optopass Mini',
+      title: '参考: Optopass Mini',
       story: 'iGEM UTokyo 2022 のプロジェクト「Optopass」を模した回路です。「読み込み」タブから読み込めます。',
-      goal: '自由に回路を組んで遊んでみましょう。',
+      goal: '自由に回路を構成し、挙動を確認してください。',
       judge(){ return { state:'todo', msg:'自由課題です。' }; }
     }
   ];
