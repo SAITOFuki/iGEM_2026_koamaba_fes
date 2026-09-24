@@ -552,6 +552,35 @@
   }
   document.getElementById('clearBtn').addEventListener('click', clearProgram);
 
+  // ---------- 全画面「細胞内分子夾雑」ビューへの受け渡し ----------
+  // ODE の定常状態タンパク質量を、細胞内コピー数濃度に換算して渡します。
+  // 強く発現したタンパク質が 1e4〜1e5 copies/µm³ 程度になるスケールです。
+  const COPIES_PER_UNIT_P = 5000;
+  const P3D_RADIUS_BY_KIND = {
+    'gene-visible': 2.4, 'gene-degrader': 3.2, 'gene-repressor': 3.0,
+    'gene-activator': 3.0, 'gene-kill': 2.8, 'gene-recomb': 3.5
+  };
+  function crowdingExtraSpecies(){
+    const merged = new Map();
+    lastResults.forEach(r => r.genes.forEach(g => {
+      const prev = merged.get(g.part.id);
+      if (prev) { prev.P += g.Pss; return; }
+      merged.set(g.part.id, { part: g.part, P: g.Pss });
+    }));
+    return [...merged.values()]
+      .filter(m => m.P > 0.05)
+      .map(m => ({
+        key: 'x_' + m.part.id,
+        label: m.part.label,
+        r: (P3D_RADIUS_BY_KIND[m.part.kind] || 3.0) * (m.part.isFusion ? 1.25 : 1),
+        perUm3: Math.round(m.P * COPIES_PER_UNIT_P),
+        color: '#' + ((SPECIES_COLOR[m.part.kind] || '#f97316').replace('#', ''))
+      }));
+  }
+  document.getElementById('openCrowding').addEventListener('click', () => {
+    window.Crowding.open({ extraSpecies: crowdingExtraSpecies() });
+  });
+
   function setBacteriumVisual(img, totalKill, totalGFP){
     if (totalKill > 1.2) {
       img.src = KILLED_IMG;
