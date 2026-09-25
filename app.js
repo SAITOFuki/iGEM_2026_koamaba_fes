@@ -85,6 +85,17 @@
   const redLightFx = document.getElementById('redLightFx');
   const tabsBar = document.getElementById('tabsBar');
   const tabContent = document.getElementById('tabContent');
+  const advancedBtn = document.getElementById('advancedBtn');
+  const advancedscript = document.getElementById('advancedscript');
+  let advanced = false;
+  const mdTab = tabsBar.querySelector('[data-tab="md"]');
+  if (mdTab) mdTab.hidden = true;
+
+  advancedBtn.addEventListener('click', () => {
+    advanced =! advanced;
+    if (mdTab) mdTab.hidden = !advanced;
+    if (activeTab === 'questions') renderQuestions();
+  });
 
   // ---------- Right panel (Lab) toggle ----------
   toggleRight.addEventListener('click', () => {
@@ -165,6 +176,7 @@
 
   // ---------- Block / drag engine ----------
   const blocks = new Map();
+  let block_list = [];
   let seq = 0, zTop = 1, dragState = null;
 
   // Positioned with translate3d rather than left/top: moving an element that carries a
@@ -199,6 +211,7 @@
     canvasBlocks.appendChild(el);
     const b = { id, partId, part, el, x, connY, w:shape.w, h:shape.h, barOffset:shape.barOffset, next:null, prev:null };
     blocks.set(id, b);
+    refreshBlockList();
     render(b);
     updateHint();
     el.addEventListener('pointerenter', () => { if (!dragState) showTooltip(el, part); });
@@ -278,6 +291,8 @@
       }
     }
 
+    refreshBlockList();
+
     if (dragState.lastHighlight) dragState.lastHighlight.el.classList.remove('snap-target');
     trayWrap.classList.remove('drag-over');
     group.forEach(id => { const b = blocks.get(id); if (b) b.el.classList.remove('dragging'); });
@@ -292,6 +307,7 @@
     const head = blocks.get(group[0]);
     if (head && head.prev) { const p = blocks.get(head.prev); if (p) p.next = null; }
     group.forEach(id => { const b = blocks.get(id); if (b) { b.el.remove(); blocks.delete(id); } });
+    refreshBlockList();
   }
 
   tray.addEventListener('pointerdown', e => {
@@ -332,10 +348,29 @@
     return seqArr;
   }
 
+  function getCurrentSequences(){
+    const heads = [...blocks.values()].filter(b => !b.prev);
+    return heads.map(head => walkChain(head).map(block => ({
+      partId: block.partId,
+      label: block.part.label,
+      kind: block.part.kind,
+      shape: block.part.shape
+    })));
+  }
+
+  function refreshBlockList(){
+    block_list = getCurrentSequences();
+    window.block_list = block_list;
+  }
+
+  window.getCurrentSequences = getCurrentSequences;
+  refreshBlockList();
+
   const SIM_DT = 0.05, SIM_STEPS = 700, SIM_SAMPLE_EVERY = 10;
   const SAMPLE_DT = SIM_DT * SIM_SAMPLE_EVERY;
 
   function eulerRun(k_tx, eff, parts){
+    //M=mRNA,P=protein
     let M = 0;
     // Each protein decays at its own rate, so a "stable" enzyme accumulates far higher.
     const proteins = parts.map(p => ({ P: 0, arr: [], decay: partDecay(p) }));
@@ -377,7 +412,14 @@
   // Collapses gene blocks in a transcript into the parts actually translated.
   // A linker sitting between two genes fuses them; a dangling linker is ignored.
   function resolveTranslatedParts(seqArr){
-    const coding = seqArr.filter(b => b.part.cat === 'gene' || b.part.kind === 'seq-linker');
+    const coding = [];
+    for (const b of seqArr) {
+      if (b.part.cat === 'promoter') continue;
+      if (b.part.kind === 'terminator') break;
+      if (b.part.cat === 'gene' || b.part.kind === 'seq-linker') {
+        coding.push(b);
+      }
+    }
     const out = [];
     for (let i = 0; i < coding.length; i++) {
       const part = coding[i].part;
@@ -422,7 +464,7 @@
     };
   }
 
-  const SIGNAL_K = 0.35, HILL_N = 2;
+  const SIGNAL_K = 0.25, HILL_N = 2;
 
   // Signal-molecule response (the Lab slider), shared by the ODE and the 2D particle sim.
   function signalFactor(kind, signal){
@@ -433,8 +475,17 @@
 
   function analyze(){
     const signal = signalLevel();
-    const heads=[...blocks.values()].filter(b=>!b.prev);
-    const chainsRaw=heads.map(walkChain).filter(seqArr=>seqArr[0].part.cat==='promoter');
+    const heads = [...blocks.values()].filter(b => !b.prev);
+    const originalChains = heads.map(walkChain);
+    const recombinaseActive = originalChains.some(seqArr => {
+      if (!seqArr.length || seqArr[0].part.cat !== 'promoter') return false;
+      if (!seqArr.some(block => block.part.kind === 'gene-recomb')) return false;
+      const promKind = seqArr[0].part.kind;
+      const sig = signalFactor(promKind, signal);
+      if (sig !== null) return sig > 0.3;
+      return promKind === 'prom-const' || promKind === 'prom-repressor';
+    });
+    const chainsRaw = originalChains.map(seqArr => sequencescheck(seqArr, recombinaseActive)).filter(seqArr => seqArr.length && seqArr[0].part.cat === 'promoter');
 
     // pass 1: regulator supply — treat promRepressor as unrepressed, promActivator as OFF (first-order approx)
     let repressorSupply = 0, activatorSupply = 0;
@@ -522,6 +573,7 @@
   }
 
   function runSimulation(){
+
     program.classList.add('running');
     runStatus.style.display = 'inline-block';
     runStatus.textContent = 'シミュレーション中…';
@@ -621,15 +673,19 @@
   }
 
   function renderPreview(results){
-    let totalGFP = 0, totalKill = 0;
+    let totalGFP = 0, totalKill = 0, totalRecomb = 0;
     const items = [];
-    results.forEach((r, ci) => r.genes.forEach((g, gi) => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
+    results.forEach(r => r.genes.forEach(g => items.push({ part: g.part, Pss: g.Pss, arr: g.arr })));
     const hasDegradingEnzyme = items.some(it => partKcat(it.part) > 0);
+
     items.forEach(it => {
       if (it.part.kind === 'gene-visible') totalGFP += it.Pss;
+      if (it.part.kind === 'gene-recomb') totalRecomb += it.Pss;
       if (it.part.kind === 'gene-kill') totalKill += it.Pss;
     });
     const dead = totalKill > 1.2;
+    const hasGFP = items.some(it => it.part.kind === 'gene-visible');
+    const hasRecombinase = items.some(it => it.part.kind === 'gene-recomb');
     setBacteriumVisual(previewBacterium, totalKill, totalGFP);
 
     if (results.length === 0) {
@@ -646,9 +702,12 @@
     } else if (hasDegradingEnzyme) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ 重油分解酵素を発現中（分解率 ' + (lastOil ? lastOil.removedPct.toFixed(1) : '0') + '%）。';
-    } else if (totalGFP > 0.1) {
+    } else if (hasGFP && totalGFP > 0.1) {
       previewStatus.className = 'preview-status ok';
       previewStatus.textContent = '✅ GFPが発現し、Genomyが発光しています（発現量 ≈ ' + totalGFP.toFixed(2) + '）。';
+    } else if (hasRecombinase && totalRecomb > 0.1) {
+      previewStatus.className = 'preview-status ok';
+      previewStatus.textContent = '✅ リコンビナーゼが発現しています（発現量 ≈ ' + totalRecomb.toFixed(2) + '）。';
     } else if (items.some(it => it.part.kind === 'gene-kill')) {
       // Kill gene present but below the lethal threshold — the containment circuit is holding.
       previewStatus.className = 'preview-status ok';
@@ -706,7 +765,8 @@
   const STAGES = [
     {
       title: 'ステージ1: 重油分解酵素を発現させる',
-      story: 'タンカーの座礁により、沿岸海域へ大量の重油が流出しました。重油の主成分である長鎖アルカンは自然界での分解が遅く、生態系への影響は数年から数十年に及びます。\n' +
+      story: "20XX/XX/XX、重油を積んだ船が沈没しました。重油は環境中で分解されにくく、海洋生物や人間の健康に悪影響を及ぼす可能性があります。\nそこで、Genochemyを使って大腸菌に重油分解酵素を作らせることにしました。\nまずは、重油分解酵素を作るための遺伝子回路を設計してみましょう。",
+      advancedstory: 'タンカーの座礁により、沿岸海域へ大量の重油が流出しました。重油の主成分である長鎖アルカンは自然界での分解が遅く、生態系への影響は数年から数十年に及びます。\n' +
              '対策として、アルカン分解酵素を発現する大腸菌を設計します。まずは遺伝子発現の最小単位である転写ユニット——プロモーター、タンパク質コーディング領域、ターミネーター——を構成してください。',
       goal: '「常に発現」→「重油分解酵素遺伝子（標準）」→「ターミネーター」を連結して実行し、海水中の重油を <b>25%以上</b> 分解する。',
       judge(ctx){
@@ -719,7 +779,8 @@
     },
     {
       title: 'ステージ2: 触媒速度と安定性のトレードオフ',
-      story: '分解酵素には複数のバリアントが存在し、触媒速度（kcat）とタンパク質の安定性が異なります。\n' +
+      story: '重油分解酵素には様々な種類があり、安定性や分解速度が異なります。\nそれぞれの分解酵素の特徴を理解し、どの分解酵素を使うか選択してみましょう。',
+      advancedstory:'分解酵素には複数のバリアントが存在し、触媒速度（kcat）とタンパク質の安定性が異なります。\n' +
              '「高速分解酵素」は kcat が高い一方で半減期が短く、細胞内にほとんど蓄積しません。「安定分解酵素」は kcat が低いものの、分解を受けにくいため時間とともに高濃度まで蓄積します。\n' +
              '両者を個別に発現させ、発現量曲線と分解率の時間変化を比較してください。',
       goal: '「高速分解酵素遺伝子」と「安定分解酵素遺伝子」を<b>それぞれ単独で</b>発現させ、両者の挙動を比較する。',
@@ -739,7 +800,8 @@
     },
     {
       title: 'ステージ3: ドメイン融合による性能の両立',
-      story: '触媒速度と安定性は、それぞれ異なるドメインに由来する性質です。両者を1本のポリペプチドとして連結できれば、速度と安定性を同時に得られる可能性があります。\n' +
+      story: '分解酵素のいいところを組み合わせて、最強の酵素を作りましょう。\n安定性が高く、分解速度も速い酵素を作ることができれば、重油の分解効率が上がります。',
+      advancedstory: '触媒速度と安定性は、それぞれ異なるドメインに由来する性質です。両者を1本のポリペプチドとして連結できれば、速度と安定性を同時に得られる可能性があります。\n' +
              '合成生物学では、2つのコーディング領域を短いリンカー配列を介してin-frameで連結し、融合タンパク質として発現させる手法が広く用いられます。\n' +
              'トレイの「リンカー配列」を2つの酵素遺伝子の<b>間</b>に挿入してください。',
       goal: '「高速分解酵素遺伝子」→「リンカー配列」→「安定分解酵素遺伝子」の順に連結して融合酵素を発現させ、重油を <b>85%以上</b> 分解する。',
@@ -752,7 +814,8 @@
     },
     {
       title: 'ステージ4: バイオコンテインメント回路の設計',
-      story: '設計した菌株が処理海域外へ流出するリスクが指摘されました。重油貯蔵タンクなど意図しない環境で増殖すれば、保管中の重油まで分解されてしまいます。\n' +
+      story:"細菌が重油貯蔵タンクに入ってしまった！特定のシグナル分子がないと死ぬようにしよう！\n悪の組織が細菌を盗み出し、重油貯蔵タンクに入れようとしているという噂が流れてきました。\nこのままではタンク内の重油がつかえなくなってしまいます。\nそこで、特定のシグナル分子がないと死ぬように遺伝子回路を設計してみましょう。",
+      advancedstory: '設計した菌株が処理海域外へ流出するリスクが指摘されました。重油貯蔵タンクなど意図しない環境で増殖すれば、保管中の重油まで分解されてしまいます。\n' +
              '遺伝子組換え生物の環境放出では、特定の化学シグナルの存在下でのみ生存できるよう設計する「キルスイッチ」方式が用いられます。シグナル分子は処理対象の海域にのみ散布します。\n' +
              'シグナル分子の存在下でキルスイッチの転写が抑制され、非存在下では発現して細胞死を誘導する回路を設計してください。',
       goal: '「シグナル分子で抑制」→「キルスイッチ遺伝子」→「ターミネーター」を連結し、Labのシグナル分子濃度を変えて<b>シグナルあり=生存／シグナルなし=死滅</b>の両方を確認する。',
@@ -770,6 +833,7 @@
     {
       title: '参考: Optopass Mini',
       story: 'iGEM UTokyo 2022 のプロジェクト「Optopass」を模した回路です。「読み込み」タブから読み込めます。',
+      advancedstory: 'advancedstory',
       goal: '自由に回路を構成し、挙動を確認してください。',
       judge(){ return { state:'todo', msg:'自由課題です。' }; }
     }
@@ -870,6 +934,27 @@
       svgChart([r.mArr], ['#888']);
   }
 
+
+  //検索用コメント
+  function sequencescheck(seqArr, recombinaseActive){
+    if (!recombinaseActive) return seqArr;
+
+    let inside = false;
+    let siteCount = 0;
+    const newSeqArr = [];
+
+    for (const block of seqArr) {
+      if (block.part.kind === 'seq-recomb') {
+        inside = !inside;
+        siteCount++;
+        continue;
+      }
+      if (!inside) newSeqArr.push(block);
+    }
+
+    return siteCount >= 2 && !inside ? newSeqArr : seqArr;
+  }
+
   const VERDICT_ICON = { pass:'✅', fail:'❌', todo:'🔬' };
 
   function enzymeComparisonTable(){
@@ -890,6 +975,7 @@
 
   function renderQuestions(){
     const stage = STAGES[quePage];
+    const story = advanced ? stage.advancedstory : stage.story;
     const verdict = lastCtx ? stage.judge(lastCtx) : { state:'todo', msg:'回路を組んで「実行」を押すと、ここに判定が出ます。' };
     if (verdict.state === 'pass') cleared[quePage] = true;
 
@@ -900,7 +986,7 @@
     tabContent.innerHTML =
       '<div class="stage-dots">' + dots + '</div>' +
       '<h3 class="stage-title">' + stage.title + (cleared[quePage] ? ' <span class="stage-clear-badge">クリア</span>' : '') + '</h3>' +
-      '<div class="stage-story">' + stage.story.replace(/\n/g, '<br>') + '</div>' +
+      '<div class="stage-story">' + story.replace(/\n/g, '<br>') + '</div>' +
       '<div class="stage-goal"><span class="stage-goal-tag">目標</span>' + stage.goal + '</div>' +
       '<div class="stage-verdict ' + verdict.state + '">' + VERDICT_ICON[verdict.state] + ' ' + verdict.msg + '</div>' +
       (quePage === 1 || quePage === 2 ? enzymeComparisonTable() : '') +
